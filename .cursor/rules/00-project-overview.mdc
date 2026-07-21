@@ -1,0 +1,33 @@
+---
+description: Invoice Canvas app automation - program context, apps, and primary users
+alwaysApply: true
+---
+
+# Project Overview
+
+This repo automates end-to-end tests for the **Invoice Canvas application** (Power Apps
+Canvas app), part of the **Synergy** program.
+
+- The Invoice app works side by side with the **Project Management** app (model-driven).
+  The PM app owns **projects, partners, and contracts** and has roles like project
+  manager, business development user, resource manager, and more.
+- Through the Invoice app, users raise **invoices for the projects** that live in the
+  Project Management app.
+- **Project Managers (PMs)** are the primary users of the Invoice app; they raise
+  invoices for their respective projects.
+
+## App entry point
+
+App URL (Canvas app, dev):
+`https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a`
+
+Tenant ID: `18323149-cc4d-4bff-809d-3eda6caec73a`
+
+The app renders ENTIRELY inside `iframe[name="fullscreen-app-host"]`. See
+`10-canvas-app-conventions` for the required locator pattern.
+
+## Scope of automation
+
+- Invoice Canvas app **UI** testing.
+- **Dataverse API** data validation (UI counts vs backend counts).
+- **Role-based** testing across personas (see `30-roles-and-security`).
