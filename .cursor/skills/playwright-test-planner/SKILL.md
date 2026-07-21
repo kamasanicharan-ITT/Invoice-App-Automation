@@ -24,7 +24,10 @@ Do NOT take screenshots unless absolutely necessary — prefer the snapshot.
 1. **Set up** — call `planner_setup_page` once before any other tool.
 2. **Navigate and explore** — use `browser_*` tools and `browser_snapshot` to discover all
    interactive elements, forms, navigation, and functionality. Remember the app lives inside
-   `iframe[name="fullscreen-app-host"]`.
+   `iframe[name="fullscreen-app-host"]`. After `browser_navigate`, do NOT
+   `browser_wait_for({ text })` on Canvas text (it lives in the iframe and will hang); use
+   `browser_wait_for({ time: 10 })` then `browser_snapshot` (the snapshot includes iframe
+   content). Re-snapshot before clicking if a `f1e*` ref is reported "not found".
 3. **Analyze user flows** — map primary journeys and critical paths. Consider each persona
    (PM = Invoice application basic user 2.0; BDU; Admin) and their typical behavior.
 4. **Design scenarios** — cover:

@@ -22,7 +22,10 @@ Use the `playwright-test` MCP server: `generator_setup_page` (call first),
 ## Workflow (per test)
 
 1. Obtain the target plan item (test suite, test name, steps, verifications, seed file).
-2. Run `generator_setup_page` to set up the page for the scenario.
+2. Run `generator_setup_page` to set up the page for the scenario. After navigating, do NOT
+   `browser_wait_for({ text })` on Canvas text (it lives in the iframe and hangs); use
+   `browser_wait_for({ time: 10 })` then `browser_snapshot`. Re-snapshot if a `f1e*` ref is
+   "not found".
 3. For each step and verification in the scenario:
    - Execute it in real time with the appropriate Playwright MCP tool.
    - Use the step description as the intent for each tool call.
@@ -37,6 +40,19 @@ Use the `playwright-test` MCP server: `generator_setup_page` (call first),
    - Apply project conventions from `40-test-conventions`: the standard import line, the
      `iframe[name="fullscreen-app-host"]` frame locator, `getByRole`/`getByText`, regex for
      dynamic counts, `expect.soft` for UI structure and hard `expect` for interaction/navigation.
+   - Capture MARKED evidence: wrap each key scenario/step in `test.step('<label>')` and call
+     `markAndShot(page, target, '<label>', testInfo)` (or `shot(...)` for overviews) from
+     `tests/utils/screenshot.ts`, AFTER asserting the scenario is loaded. Never use
+     `locator.screenshot()` for evidence (it crops). See the "Marked screenshots" section of
+     `40-test-conventions`.
+
+## Verify locators empirically (don't guess)
+
+When a locator fails or is ambiguous, do NOT swap strategies blindly. Measure first: use
+`browser_run_code_unsafe` to check candidate counts, e.g.
+`await f.getByRole('button', { name: '.', exact: true }).count()`, and inspect the DOM with
+`browser_evaluate`. Canvas controls are absolutely-positioned siblings, so label-scoped
+locators fail — prefer role/name/placeholder that resolve to exactly one element.
 
 ## Role-based tests
 

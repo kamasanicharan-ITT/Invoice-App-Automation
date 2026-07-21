@@ -6,7 +6,7 @@ export default defineConfig({
   retries: 1,
   fullyParallel: false,
 
-  reporter: [['list']],
+  reporter: [['list'], ['html', { open: 'never' }]],
 
   use: {
     headless: false,
