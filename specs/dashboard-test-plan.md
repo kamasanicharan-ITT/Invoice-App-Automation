@@ -2,60 +2,90 @@
 
 ## Application Overview
 
-Test plan for the Dashboard screen of the Invoice Application canvas app, based on the live UI observed in Power Apps.
-
-## Test Scenarios
-
-### 1. Dashboard screen
+Test plan for the **Dashboard** screen of the Invoice Canvas application, based on the live
+UI observed in Power Apps and the Dataverse backend. This is the **single source of truth**
+for the Dashboard suite; all scenarios below live in one spec: `tests/dashboard.spec.ts`.
 
 **Seed:** `tests/seed.spec.ts`
 
-#### 1.1. Dashboard loads with all expected elements visible
+## Billing-cycle count logic (reverse-engineered from the live app)
 
-**File:** `specs/dashboard-dashboard-load.spec.md`
+The Invoice Tasks tiles are **not** a naive `status + date` count. Investigating the app's
+own Dataverse traffic and comparing UI counts to API counts revealed the exact rules the
+dashboard applies. A test that ignores these will report false failures (this is what the old
+`dataverse-check` / `updated-dataverse-check` specs hit on Submitted and Failed).
 
-**Steps:**
-  1. Open the app from a fresh authenticated session and land on the Dashboard screen.
-    - expect: The Dashboard header is displayed.
-    - expect: The Region filter control is displayed and enabled.
-    - expect: The four summary cards are visible: Total Invoices, Total Partners, Total Project, and Total Revenue.
-    - expect: The Invoice Tasks section is visible.
-    - expect: All task rows are visible: Total Tasks, Drafts, Flagged, Submitted, Reviewed, Approved, Failed, Cancelled, and Sent.
-    - expect: The Create Invoice button is visible in the top-right of the screen.
+- **Billing cycle**: 6th of the current month → 5th of the next month. If today is before the
+  6th, the active cycle started on the 6th of the previous month. The filter uses
+  `dia_invoicedate` and **includes future-dated invoices** inside the window — the dashboard
+  genuinely shows them (e.g. 5 of 6 Drafts were future-dated yet all 6 appear on the tile).
+  Do **NOT** cap the window end at "today" — that under-counts and was a wrong hypothesis.
+- **`dia_isreported eq null`** applies to every tile: already-reported invoices leave the task
+  list. This is what corrects **Failed** (raw 13 → 11; two Failed invoices were reported).
+  `dia_isreported` is a date-style field, so filter with `eq null` (not `eq true/false`).
+- **`dia_adhocinvoice eq true`** applies to the **Submitted** tile only: it counts adhoc
+  submitted invoices (raw 92 → 89; three Submitted invoices were non-adhoc). Other tiles are
+  NOT adhoc-filtered (e.g. only 2 of 6 Drafts are adhoc, but the tile shows 6).
+- **Total Tasks** = Draft + Flagged + Submitted + Reviewed + Approved + Failed (the actionable
+  states). Cancelled and Sent are terminal and excluded from Total Tasks.
 
-#### 1.2. Region filter changes the dashboard data
+## Test Scenarios
 
-**File:** `specs/dashboard-region-filter.spec.md`
+### 1. Dashboard Screen
 
-**Steps:**
-  1. Locate the Region dropdown and open it.
-    - expect: The dropdown presents the expected region options: Australia, Colombia, India, Netherlands, North America, Saudi Arabia, South Korea, and UAE.
-  2. Select a region such as Australia and wait for the dashboard to refresh.
-    - expect: The summary card values update from the previous state.
-    - expect: The task counts and descriptions update to reflect the selected region.
-    - expect: The page remains on the Dashboard screen without error.
-  3. Repeat the selection for at least one additional region such as India or North America.
-    - expect: The dashboard data changes again for the new selection.
-    - expect: The region filter is responsive and does not break the layout or clear the page.
+#### UI structure (persona: PM — baseline; also valid for BDU / Admin)
 
-#### 1.3. Task action buttons navigate to the correct invoice views
+##### TC-DB-01 — Header and navigation are visible
+1. Open the app on a fresh authenticated session and land on the Dashboard.
+   - expect: `Dashboard` header visible; `Dashboard`, `Invoice Overview`, and
+     `Create Invoice` navigation controls visible.
 
-**File:** `specs/dashboard-task-buttons.spec.md`
+##### TC-DB-02 — All four summary cards are visible
+1. On the Dashboard, verify the summary cards.
+   - expect: `Total Invoices`, `Total Partners`, `Total Project`, `Total Revenue` visible,
+     each with `This Month` and `Last Month` sub-labels.
 
-**Steps:**
-  1. Review the Invoice Tasks rows and identify each button label.
-    - expect: Each task row has its corresponding button: View All, View Drafts, View Flagged, View Submitted, View Reviewed, View Approved, View Failed, View Cancelled, and View Sent.
-  2. Click each task button one by one in a fresh session or after returning to Dashboard.
-    - expect: Each click navigates away from the Dashboard to the relevant invoice list or task-specific view.
-    - expect: The resulting screen shows invoices relevant to the selected task state.
-    - expect: The user can return to Dashboard and continue testing the next button without a UI error.
+##### TC-DB-03 — Invoice Tasks section has all 9 rows and action buttons
+1. Verify the Invoice Tasks section and each task row.
+   - expect: `Invoice Tasks` visible and each row shows a numeric count (regex, never
+     hard-coded) with its button: Total Tasks/View All, Drafts/View Drafts,
+     Flagged/View Flagged, Submitted/View Submitted, Reviewed/View Reviewed,
+     Approved/View Approved, Failed/View Failed, Cancelled/View Cancelled, Sent/View Sent.
 
-#### 1.4. Create Invoice button navigates to the Create Invoice screen
+##### TC-DB-04 — Region dropdown shows all 8 regions
+1. Open the Region dropdown.
+   - expect: options Australia, Colombia, India, Netherlands, North America, Saudi Arabia,
+     South Korea, UAE.
 
-**File:** `specs/dashboard-create-invoice.spec.md`
+##### TC-DB-05 — Region filter is applied
+1. Open the Region dropdown and select a region (e.g. India).
+   - expect: the dropdown reflects the selection and the Dashboard stays intact (Invoice
+     Tasks still visible, no error). Uses robust waits, no fixed timeout.
 
-**Steps:**
-  1. Click the Create Invoice button from the Dashboard.
-    - expect: The app navigates to the Create Invoice screen.
-    - expect: The Create Invoice screen is displayed with its input and action elements available.
-    - expect: The user can return to Dashboard if needed.
+##### TC-DB-06 — Create Invoice navigates to the New Invoice screen
+1. Click `Create Invoice` from the Dashboard.
+   - expect: navigation to the `New Invoice` screen.
+
+##### TC-DB-07 — Marked screenshot evidence of every Invoice Tasks row
+1. After the dashboard data loads, capture a full-context overview screenshot, then a marked
+   screenshot per status row (Total Tasks, Drafts, Flagged, Submitted, Reviewed, Approved,
+   Failed, Cancelled, Sent) using `markAndShot`.
+   - expect: evidence attached to the report; no cropping.
+
+#### Dataverse data validation (UI count == Dataverse count)
+
+Token captured once in `beforeAll` from the Canvas app's Dataverse traffic. Each test compares
+the tile count to a Dataverse `$count` built with the billing-cycle logic above.
+
+- TC-DV-01 Draft — `dia_status eq 'Draft'`
+- TC-DV-02 Submitted — `dia_status eq 'Submitted' and dia_adhocinvoice eq true`
+- TC-DV-03 Reviewed — `dia_status eq 'Reviewed'`
+- TC-DV-04 Approved — `dia_status eq 'Approved'`
+- TC-DV-05 Flagged — `dia_status eq 'Flagged'`
+- TC-DV-06 Failed — `Fail-Creation/Update/Flag/Approval/Review`
+- TC-DV-07 Cancelled — `dia_status eq 'Cancelled'`
+- TC-DV-08 Sent — `dia_status eq 'Sent'`
+- TC-DV-09 Total Tasks — equals Draft + Flagged + Submitted + Reviewed + Approved + Failed
+
+All Dataverse filters additionally apply `dia_isreported eq null` and the billing-cycle
+`dia_invoicedate` window.
