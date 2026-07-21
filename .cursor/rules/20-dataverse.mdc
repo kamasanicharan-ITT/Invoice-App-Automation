@@ -1,0 +1,44 @@
+---
+description: Dataverse backend schema, status values, billing cycle, and token capture
+globs: tests/**/*.ts
+alwaysApply: false
+---
+
+# Dataverse Backend
+
+- Dataverse URL (dev): `https://dev-itt-apps.crm8.dynamics.com`
+- Invoice table EntitySetName: `dia_invoicedetailses`
+- Invoice status field: `dia_status` (plain TEXT, NOT a choice column)
+- Date field for filtering: `dia_invoicedate`
+
+## Status values
+
+`Draft, Submitted, Reviewed, Approved, Flagged, Cancelled, Sent, Fail-Creation,
+Fail-Update, Fail-Flag, Fail-Approval, Fail-Review`
+
+**Failed on Dashboard** = `Fail-Creation OR Fail-Update OR Fail-Flag OR Fail-Approval OR Fail-Review`.
+
+## Billing cycle
+
+6th of the current month to the 5th of the NEXT month (NOT the calendar month).
+Filter records with `dia_invoicedate` inside this range. See `getBillingCycleDates()`.
+
+## Token capture pattern
+
+Dataverse calls use a Bearer token intercepted from the Canvas app's network traffic.
+
+- Listen with `page.on('request')` for requests to `crm8.dynamics.com` that carry an
+  `Authorization: Bearer` header.
+- Always type the callback parameter as `Request` from `@playwright/test`.
+- Capture the token in `test.beforeAll` so it runs once per describe block.
+
+```ts
+const onRequest = (req: Request) => {
+  const authHeader = req.headers()['authorization'];
+  if (req.url().includes('crm8.dynamics.com') && authHeader?.startsWith('Bearer ')) {
+    page.off('request', onRequest);
+    resolve(authHeader.replace('Bearer ', ''));
+  }
+};
+page.on('request', onRequest);
+```
