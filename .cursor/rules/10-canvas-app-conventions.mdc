@@ -1,0 +1,34 @@
+---
+description: Power Apps Canvas locator rules for Playwright tests
+globs: tests/**/*.ts
+alwaysApply: false
+---
+
+# Canvas App Locator Conventions
+
+The app renders ENTIRELY inside `iframe[name="fullscreen-app-host"]`. Every locator MUST
+go through the frame first. NEVER write locators directly on the page for Canvas elements.
+
+```ts
+const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
+await expect.soft(appFrame.getByRole('button', { name: 'Dashboard' })).toBeVisible();
+```
+
+## Rules
+
+- Use `getByRole` and `getByText`. NEVER use auto-generated CSS IDs or appmagic IDs.
+- `getByLabel` does NOT work in Canvas apps — use `getByPlaceholder` or `getByText`.
+- Canvas toggles are custom controls — click the label text to toggle them.
+- Canvas rich text areas are contenteditable — use `.fill()` then assert `toHaveValue()`.
+- Delete buttons are image icons — use `getByRole('img')`, NOT `getByRole('button')`.
+- NEVER hardcode counts — use regex, e.g. `appFrame.getByText(/\d+\s*Drafts/)`.
+- Use `expect.soft` for UI structure visibility assertions.
+- Use hard `expect` for interaction and navigation assertions.
+- NEVER use `waitForTimeout` except inside the `getDashboardTaskCount` helper.
+- Never wait for `networkidle` or use deprecated/discouraged APIs.
+
+## Authentication
+
+Auth is handled via `storageState` in `playwright.config.ts`. Tests NEVER include a login
+step — the saved session handles it. NEVER add login code to any test file.
+`auth.json` and `auth/` must NEVER be committed (already in `.gitignore`).

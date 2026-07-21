@@ -1,0 +1,38 @@
+---
+description: Security roles and personas for role-based Invoice app testing
+alwaysApply: true
+---
+
+# Roles and Security (Personas)
+
+Two environment-level security roles plus an admin flag drive role-based testing.
+
+## Environment security roles
+
+- **Invoice application basic user 2.0** — assigned to **Project Managers (PMs)**. PMs are
+  the PRIMARY users; they raise invoices for their own projects. This is the baseline,
+  least-privileged persona.
+- **BDU (Business Development User)** — elevated / high-level access across the app.
+
+## Admin
+
+Admin is NOT a separate environment security role. It is managed in a dedicated
+**security-roles table** in Dataverse, where a user is given the role value `admin`.
+BDUs are entered into that table as `admin`, so **BDU = admin** in practice.
+
+## Personas for tests
+
+| Persona | Security role | Admin? | storageState |
+|---------|---------------|--------|--------------|
+| PM      | Invoice application basic user 2.0 | No  | `auth/pm.json` |
+| BDU     | BDU                                | Yes | `auth/bdu.json` |
+| Admin   | BDU + `admin` in security table    | Yes | `auth/admin.json` |
+
+## Role-based testing guidance
+
+- Each scenario should state the persona(s) it targets and the expected outcome
+  (allow / deny / visible / hidden).
+- PM should be restricted to their own projects' invoices; BDU/Admin see broader scope
+  and elevated actions (review/approve/admin functions).
+- Use the persona's `storageState` to run the same scenario under different access levels.
+  See the `capture-role-auth` skill for producing each auth state.

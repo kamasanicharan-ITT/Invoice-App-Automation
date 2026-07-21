@@ -1,0 +1,46 @@
+---
+description: Playwright test file conventions, imports, and helper catalog for this repo
+globs: tests/**/*.ts
+alwaysApply: false
+---
+
+# Test Conventions
+
+## Imports
+
+Always use this single import line:
+
+```ts
+import { test, expect, request, type Page, type FrameLocator, type Request } from '@playwright/test';
+```
+
+## File header
+
+Generated specs begin with the plan + seed reference comments:
+
+```ts
+// spec: specs/<plan-file>.md
+// seed: tests/seed.spec.ts
+```
+
+## Naming
+
+- Test IDs: `TC-<AREA>-<NN>` (e.g. `TC-DB-01` dashboard UI, `TC-DV-01` Dataverse validation).
+- `describe` matches the top-level plan item (e.g. `Dashboard Screen`).
+- Generated test title matches the scenario name; one test per generated file.
+- Include a comment with the plan step text before each step execution.
+
+## Helper functions (reuse; do not reinvent)
+
+- `openDashboard(page)` — navigates to app URL, waits for `Dashboard`, returns `appFrame`.
+- `openCreateInvoice(page)` — navigates, clicks Create Invoice, returns `appFrame`.
+- `getBillingCycleDates()` — returns `{ start, end }` ISO dates for the current billing cycle.
+- `getDataverseCount(token, filterExpression)` — calls Dataverse with filter, returns count.
+- `getDashboardTaskCount(page, appFrame, labelPattern)` — reads a numeric count from the
+  Invoice Tasks section (the ONLY place `waitForTimeout` is allowed).
+- `getLineItemCount(appFrame)` — counts line item rows on the Create Invoice form.
+
+## Assertions
+
+- `expect.soft` for UI structure visibility; hard `expect` for interaction/navigation.
+- Prefer regex over literal counts for dynamic values.
