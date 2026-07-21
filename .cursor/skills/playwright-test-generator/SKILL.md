@@ -22,7 +22,10 @@ Use the `playwright-test` MCP server: `generator_setup_page` (call first),
 ## Workflow (per test)
 
 1. Obtain the target plan item (test suite, test name, steps, verifications, seed file).
-2. Run `generator_setup_page` to set up the page for the scenario.
+2. Run `generator_setup_page` to set up the page for the scenario. After navigating, do NOT
+   `browser_wait_for({ text })` on Canvas text (it lives in the iframe and hangs); use
+   `browser_wait_for({ time: 10 })` then `browser_snapshot`. Re-snapshot if a `f1e*` ref is
+   "not found".
 3. For each step and verification in the scenario:
    - Execute it in real time with the appropriate Playwright MCP tool.
    - Use the step description as the intent for each tool call.
