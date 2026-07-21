@@ -16,6 +16,17 @@ await expect.soft(appFrame.getByRole('button', { name: 'Dashboard' })).toBeVisib
 
 ## Rules
 
+- Controls are ABSOLUTELY-POSITIONED SIBLINGS, not visually nested. Do NOT scope a control by
+  its on-screen label's parent (e.g. `xpath=//div[.="Region"]/..`) — the label and the control
+  are separate siblings, so that resolves to nothing. Locate the control directly by role/name.
+- After opening a screen, WAIT for real data to load (e.g. a data row) before
+  asserting on late-rendering controls — several controls (dropdowns, pagination) render after
+  the grid. Add a data-row wait to navigation helpers.
+- Dropdowns (period / Region) render as `getByRole('button', { name })` and open a
+  `getByRole('option', { name })` listbox. Selected value becomes the button name (e.g.
+  `. This Month`); an unselected Region shows the placeholder name `.` (unique on the screen).
+- Match the app's ACTUAL text, including typos (e.g. period options are `Quater to Date` /
+  `Last Quater`, not "Quarter").
 - Use `getByRole` and `getByText`. NEVER use auto-generated CSS IDs or appmagic IDs.
 - `getByLabel` does NOT work in Canvas apps — use `getByPlaceholder` or `getByText`.
 - Canvas toggles are custom controls — click the label text to toggle them.
@@ -32,3 +43,18 @@ await expect.soft(appFrame.getByRole('button', { name: 'Dashboard' })).toBeVisib
 Auth is handled via `storageState` in `playwright.config.ts`. Tests NEVER include a login
 step — the saved session handles it. NEVER add login code to any test file.
 `auth.json` and `auth/` must NEVER be committed (already in `.gitignore`).
+
+## Live MCP exploration (planner / generator)
+
+When driving the app live via the `playwright-test` MCP, the Canvas content lives inside the
+iframe, so top-level readiness checks do NOT see it:
+
+- Do NOT use `browser_wait_for({ text: "Dashboard" })` — text inside the iframe is invisible
+  to the top-level page, so it hangs until timeout.
+- Instead, after `browser_navigate`, use a timed settle then snapshot:
+  `browser_wait_for({ time: 10 })` then `browser_snapshot`. The snapshot DOES include iframe
+  content (nodes appear with `f1e*` refs).
+- Refs (`f1e*`) go stale when the frame re-renders. Re-`browser_snapshot` before clicking if
+  a ref is "not found".
+- This applies only to live exploration; generated test code still uses
+  `frameLocator('iframe[name="fullscreen-app-host"]')`, which correctly enters the frame.
