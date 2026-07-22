@@ -1,36 +1,81 @@
 ---
-description: Dataverse backend schema, status values, billing cycle, and token capture
+description: Dataverse schema, billing filters, status filters, and token capture
 globs: tests/**/*.ts
 alwaysApply: false
 ---
 
 # Dataverse Backend
 
-- Dataverse URL (dev): `https://dev-itt-apps.crm8.dynamics.com`
-- Invoice table EntitySetName: `dia_invoicedetailses`
-- Invoice status field: `dia_status` (plain TEXT, NOT a choice column)
-- Date field for filtering: `dia_invoicedate`
+- Dev Dataverse URL: `https://dev-itt-apps.crm8.dynamics.com`
+- Invoice display name: Invoice Details
+- EntitySetName: `dia_invoicedetailses`
+- Primary key: `dia_invoicedetailsid`
+
+## Key columns
+
+| Column | Use |
+|--------|-----|
+| `dia_status` | Status — plain TEXT (not choice) |
+| `dia_invoicedate` | Invoice Date — all period filters |
+| `dia_invoicenumber` | Auto after submit |
+| `dia_ponumber` | PO Number |
+| `dia_AccountID` | Partner lookup |
+| `dia_ProjectID` | Project lookup |
+| `dia_ServiceStartDate` / `dia_ServiceEndDate` | Service period |
+| `dia_isReported` | Failure reported (`Yes` or blank) |
+| `dia_InternalNotes` | Rich text |
+| `dia_AdhocInvoice` | Yes/No |
+
+## Related tables (Create Invoice)
+
+| Table | EntitySetName | Notes |
+|-------|---------------|-------|
+| Account (Partner) | `accounts` | Partner dropdown |
+| Project | `dia_projects` | LogicalName `dia_project`; Region `ittdev_region`; Partner lookup `ittdev_account`; Name `dia_projectname`; Status Active |
+| Contract | `ittdev_contracts` | Lookup `ittdev_dia_Project` → Project; `ittdev_StartDate` / `ittdev_EndDate`; `statecode` Active; Name `ittdev_Name` |
+| Product/Services | `dia_productserviceses` | Name `dia_productservicename`; Rate `dia_productservicerate`; Type `ittdev_productservicetype` (Editable Rate / Non-Editable Rate / Discount) |
+| Billing Info (line items) | `dia_invoicelineitemdetailses` | Qty `dia_quantity`; Rate `dia_rate`; Total `dia_total`; Invoice lookup `dia_invoiceid` |
+| Invoice Filtering Options | `dia_invoicefilteringoptionses` | This Month / Last Month windows for duplicate checks |
+| Security Roles | `dia_securityroles` | Admin elevation |
 
 ## Status values
 
-`Draft, Submitted, Reviewed, Approved, Flagged, Cancelled, Sent, Fail-Creation,
-Fail-Update, Fail-Flag, Fail-Approval, Fail-Review`
+`Draft, Submitted, Reviewed, Approved, Flagged, Cancelled, Sent,
+Fail-Creation, Fail-Update, Fail-Flag, Fail-Approval, Fail-Review`
 
-**Failed on Dashboard** = `Fail-Creation OR Fail-Update OR Fail-Flag OR Fail-Approval OR Fail-Review`.
+**Failed (Dashboard)** = all five `Fail-*` **and** `dia_isReported` blank.
 
-## Billing cycle
+## Billing cycle date filter
 
-6th of the current month to the 5th of the NEXT month (NOT the calendar month).
-Filter records with `dia_invoicedate` inside this range. See `getBillingCycleDates()`.
+```
+dia_invoicedate ge {6th current month ISO} and dia_invoicedate le {5th next month ISO}
+```
 
-## Token capture pattern
+Use `getBillingCycleDates()` — not calendar month. Period variants: see `50-app-functionality`.
 
-Dataverse calls use a Bearer token intercepted from the Canvas app's network traffic.
+## Count query pattern
 
-- Listen with `page.on('request')` for requests to `crm8.dynamics.com` that carry an
-  `Authorization: Bearer` header.
-- Always type the callback parameter as `Request` from `@playwright/test`.
-- Capture the token in `test.beforeAll` so it runs once per describe block.
+```
+GET {DATAVERSE_URL}/api/data/v9.2/dia_invoicedetailses
+  ?$filter=({status}) and ({date})
+  &$count=true &$top=1 &$select=dia_invoicedetailsid
+```
+
+Headers: `Authorization: Bearer {token}`, OData 4.0, `Prefer: odata.include-annotations="*"`.
+Read total from `@odata.count`.
+
+Example Failed filter:
+
+```
+(dia_status eq 'Fail-Creation' or ... or dia_status eq 'Fail-Review')
+and (dia_isReported eq null or dia_isReported eq '')
+```
+
+## Token capture
+
+Intercept Canvas traffic: `page.on('request')` for `crm8.dynamics.com` with
+`Authorization: Bearer`. Capture in `test.beforeAll` once per describe. Type the
+callback param as `Request` from `@playwright/test`.
 
 ```ts
 const onRequest = (req: Request) => {
