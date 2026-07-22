@@ -66,11 +66,9 @@ dashboard applies. A test that ignores these will report false failures (this is
 1. Click `Create Invoice` from the Dashboard.
    - expect: navigation to the `New Invoice` screen.
 
-##### TC-DB-07 — Marked screenshot evidence of every Invoice Tasks row
-1. After the dashboard data loads, capture a full-context overview screenshot, then a marked
-   screenshot per status row (Total Tasks, Drafts, Flagged, Submitted, Reviewed, Approved,
-   Failed, Cancelled, Sent) using `markAndShot`.
-   - expect: evidence attached to the report; no cropping.
+Evidence: every scenario (UI and Dataverse) scrolls to the element under observation and
+captures a marked `markAndShot` after Playwright auto-wait confirms it is visible — no
+dedicated “screenshot-only” test case.
 
 #### Dataverse data validation (UI count == Dataverse count)
 
@@ -85,7 +83,10 @@ the tile count to a Dataverse `$count` built with the billing-cycle logic above.
 - TC-DV-06 Failed — `Fail-Creation/Update/Flag/Approval/Review`
 - TC-DV-07 Cancelled — `dia_status eq 'Cancelled'`
 - TC-DV-08 Sent — `dia_status eq 'Sent'`
-- TC-DV-09 Total Tasks — equals Draft + Flagged + Submitted + Reviewed + Approved + Failed
+- TC-DV-09 Total Tasks — UI Total Tasks equals one Dataverse count of all actionable
+  statuses (same UI==API pattern; not a client-side sum assertion). Waits via `expect.poll`
+  until the Total Tasks label settles to the sum of the on-screen status tiles (the label can
+  briefly show a stale aggregate), then compares to Dataverse.
 
-All Dataverse filters additionally apply `dia_isreported eq null` and the billing-cycle
-`dia_invoicedate` window.
+All Dataverse filters (including Total Tasks) apply `dia_isreported eq null` and the
+billing-cycle `dia_invoicedate` window.
