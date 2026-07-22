@@ -28,3 +28,14 @@ Invoice app to raise invoices for their projects.
 - Never add login code; auth is handled via `storageState`. Never commit `auth.json` or `auth/`.
 - Never hardcode counts — use regex (e.g. `/\d+\s*Drafts/`).
 - Use `getByRole` / `getByText`; never auto-generated CSS/appmagic IDs.
+
+## App domain knowledge (persistent for future chats)
+
+| Rule | Contents |
+|------|----------|
+| `00-project-overview` | Synergy apps, envs, entry URL |
+| `10-canvas-app-conventions` | Locator patterns |
+| `20-dataverse` | Schema, filters, token capture |
+| `30-roles-and-security` | PM vs BDU/Admin (admin table) |
+| `40-test-conventions` | Spec style, helpers, screenshots |
+| `50-app-functionality` | Screens, lifecycle, billing, business rules |

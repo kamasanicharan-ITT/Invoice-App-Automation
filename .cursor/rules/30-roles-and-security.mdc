@@ -1,38 +1,42 @@
 ---
-description: Security roles and personas for role-based Invoice app testing
+description: Power Apps roles vs admin flag, and PM / BDU-Admin personas for tests
 alwaysApply: true
 ---
 
 # Roles and Security (Personas)
 
-Two environment-level security roles plus an admin flag drive role-based testing.
+## Environment security roles (Power Apps)
 
-## Environment security roles
+Two roles exist. **By themselves they look and behave the same** in the Invoice UI
+(own invoices, no All Invoices radio, no adhoc, no approve/review) until the user is
+also marked admin in the Security Roles table.
 
-- **Invoice application basic user 2.0** — assigned to **Project Managers (PMs)**. PMs are
-  the PRIMARY users; they raise invoices for their own projects. This is the baseline,
-  least-privileged persona.
-- **BDU (Business Development User)** — elevated / high-level access across the app.
+| Role | Typical assignee | Alone (no admin row) |
+|------|------------------|----------------------|
+| Invoice application basic user 2.0 | Project Managers (PM) | My Invoices only; 1 non-adhoc invoice per billing period per project; cannot approve/review |
+| BDU (Business Development User) | Business Development | Same UI/access as Basic User until admin |
 
-## Admin
+## Admin (application-level — separate table)
 
-Admin is NOT a separate environment security role. It is managed in a dedicated
-**security-roles table** in Dataverse, where a user is given the role value `admin`.
-BDUs are entered into that table as `admin`, so **BDU = admin** in practice.
+Admin is **not** a Power Apps environment role. It is a row in the Dataverse
+**Security Roles** table (`role = admin` for the user's email).
+
+- Elevates the user: All Invoices, full Dashboard counts, Adhoc Invoice toggle,
+  approve / review / flag / send.
+- In practice **only BDUs are added** as admin (a Basic User *could* be elevated the
+  same way, but that is not how the org assigns it).
+- Current test account (Kamasani Charan) is **BDU + admin**.
 
 ## Personas for tests
 
-| Persona | Security role | Admin? | storageState |
-|---------|---------------|--------|--------------|
-| PM      | Invoice application basic user 2.0 | No  | `auth/pm.json` |
-| BDU     | BDU                                | Yes | `auth/bdu.json` |
-| Admin   | BDU + `admin` in security table    | Yes | `auth/admin.json` |
+| Persona | Power Apps role | Security Roles table | storageState | Expected access |
+|---------|-----------------|----------------------|--------------|-----------------|
+| PM | Basic User 2.0 | Not present | `auth/pm.json` | Own invoices only; no All Invoices; no adhoc; no approve/review |
+| BDU/Admin | BDU | `admin` | `auth/bdu.json` or `auth/admin.json` | All invoices; adhoc unlimited; review/approve/flag/send; full Dashboard |
+
+Treat **BDU and Admin as the same elevated persona** in practice (BDU + admin row).
 
 ## Role-based testing guidance
 
-- Each scenario should state the persona(s) it targets and the expected outcome
-  (allow / deny / visible / hidden).
-- PM should be restricted to their own projects' invoices; BDU/Admin see broader scope
-  and elevated actions (review/approve/admin functions).
-- Use the persona's `storageState` to run the same scenario under different access levels.
-  See the `capture-role-auth` skill for producing each auth state.
+- State persona + expected outcome (allow / deny / visible / hidden) on every scenario.
+- Run the same flow under different `storageState` files — see `capture-role-auth`.

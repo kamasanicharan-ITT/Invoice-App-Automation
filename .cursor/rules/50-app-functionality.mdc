@@ -1,0 +1,91 @@
+---
+description: Invoice app screens, lifecycle, billing filters, and business rules
+alwaysApply: true
+---
+
+# Invoice App Functionality
+
+Source of truth for product behavior when planning or writing tests. UI locator details
+live in `10-canvas-app-conventions`; Dataverse fields/API in `20-dataverse`.
+
+## Invoice lifecycle
+
+Happy path: **Create → Submit → Review → Approve → Send**
+
+| Status | Meaning | Next Step (Overview) |
+|--------|---------|----------------------|
+| Draft | Editable, not submitted | (none or Edit) |
+| Submitted | Awaiting review | **Review** |
+| Reviewed | Awaiting approval | **Approve** |
+| Approved | Waiting to send | **View** |
+| Sent | Sent to customer | **View** |
+| Flagged | Sent back for edit | **Edit** |
+| Cancelled | Cancelled | — |
+| Fail-Creation / Fail-Update / Fail-Flag / Fail-Approval / Fail-Review | Power Automate failure | **Report** |
+
+Each workflow step runs a Power Automate flow (notify, update status, advance). Flow
+failure → matching `Fail-*` status.
+
+**Dashboard Failed** = all five `Fail-*` statuses where `dia_isReported` is blank
+(unreported only).
+
+### Invoice types
+
+- **Non-adhoc (standard):** 1 invoice per billing period per project per contract.
+  Second attempt → duplicate error. Available to PM and BDU.
+- **Adhoc:** unlimited; **admin only**. Toggle **Adhoc Invoice** ON; forces **Brand New**.
+
+## Billing / period filters (`dia_invoicedate`)
+
+Not a calendar month for This/Last Month:
+
+| Period | Range |
+|--------|--------|
+| This Month (current cycle) | 6th current month 00:00 → 5th next month 23:59 |
+| Last Month | 6th previous → 5th current |
+| Future Months | From 6th of **next** month onward |
+| Quarter / Year to Date, Last Quarter / Year | **Calendar** boundaries (not billing cycle) |
+
+Example (July 2026 This Month): 2026-07-06 → 2026-08-05.
+
+## Screen: Dashboard (default landing)
+
+- Header **Dashboard**; **+ Create Invoice**; **Region** filter (8 regions).
+- Summary cards (This Month + Last Month; **excludes Cancelled**; region-filtered):
+  Total Invoices, Total Partners, Total Project, Total Revenue.
+- **Invoice Tasks** rows: Total Tasks, Drafts, Flagged, Submitted, Reviewed, Approved,
+  Failed, Cancelled, Sent — each with a View … action.
+- Task counts: **admin** = all invoices in billing cycle; **PM** = only where user is
+  Submitter, Reviewer, or Approver.
+- Regions: Australia, Colombia, India, Netherlands, North America, Saudi Arabia,
+  South Korea, UAE.
+
+## Screen: Invoice Overview
+
+- Nav: **Invoice Overview**. **+ Create Invoice**.
+- Radios **My Invoices** | **All Invoices** — **PM sees My Invoices only** (no radios).
+- Period dropdown: This Month, Last Month, Quater to Date, Last Quater, Year to Date,
+  Last Year, Future Months (match app typos **Quater**).
+- Region filter; Search (Partner, Project, Invoice #).
+- Table: Partner | Project | Invoice # | Action Pending with | Status | Next Step | ⋮
+- Status badge colors: Submitted blue, Reviewed yellow/orange, Approved green,
+  Flagged red, Draft grey, Sent purple; Fail-* as red text.
+- Pagination at bottom.
+
+## Screen: Create Invoice
+
+- Radios: **Brand New** | **Start with last invoice** (pre-fills line items). Adhoc ON → Brand New.
+- Toggles: **Adhoc Invoice** (default No, admin only); **Send Instantly** (urgent send notify).
+- Invoice # / PO # disabled until after Submit (auto-populated).
+- Invoice Date defaults to billing cycle **end**; Service Start/End default to cycle
+  start/end; must fall within active **contract** period.
+- Partner → filters Project. Line items: Product/Service | Description | Qty | Rate | Total.
+  Product types: fixed locked rate | editable rate | enter both. Total = Qty × Rate.
+  Add new item / delete row (img). Internal Notes optional rich text.
+- Actions: Close, Save Draft (Draft, no flow), Submit (starts approval flow).
+- Validation: Partner, Project, ≥1 line with Qty>0 and Rate>0, service dates in contract.
+
+## Related Dataverse tables (context)
+
+Accounts (partners), Projects (incl. Region), Contracts (valid service dates),
+Products/Services, Security Roles (admin), Invoice Mail Lists (reviewer/approver per project).
