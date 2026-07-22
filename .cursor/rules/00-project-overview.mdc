@@ -1,33 +1,43 @@
 ---
-description: Invoice Canvas app automation - program context, apps, and primary users
+description: Synergy program context, two apps, environments, and automation scope
 alwaysApply: true
 ---
 
 # Project Overview
 
-This repo automates end-to-end tests for the **Invoice Canvas application** (Power Apps
-Canvas app), part of the **Synergy** program.
+The **Synergy** program has two interconnected Power Apps sharing one Dataverse environment.
 
-- The Invoice app works side by side with the **Project Management** app (model-driven).
-  The PM app owns **projects, partners, and contracts** and has roles like project
-  manager, business development user, resource manager, and more.
-- Through the Invoice app, users raise **invoices for the projects** that live in the
-  Project Management app.
-- **Project Managers (PMs)** are the primary users of the Invoice app; they raise
-  invoices for their respective projects.
+## Applications
 
-## App entry point
+1. **Project Management** (model-driven) — Partners, Projects, Contracts, Resources.
+   Used by PMs, BDUs, Resource Managers. Feeds data INTO the Invoice app.
+2. **Invoice Canvas** (Canvas) — create, manage, and track invoices.
+   Reads partner/project/contract data from the PM app. Stores invoices in
+   `dia_invoicedetails` / EntitySetName `dia_invoicedetailses`.
+   **This is the primary app under automation.**
 
-App URL (Canvas app, dev):
-`https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a`
+## Invoice app technical entry
 
-Tenant ID: `18323149-cc4d-4bff-809d-3eda6caec73a`
+- Renders ENTIRELY inside `iframe[name="fullscreen-app-host"]` (see `10-canvas-app-conventions`).
+- Dev URL:
+  `https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a`
+- Tenant ID: `18323149-cc4d-4bff-809d-3eda6caec73a`
+- Auth: Azure AD (+ MFA). Backend: Dataverse (`https://{org}.crm8.dynamics.com`).
 
-The app renders ENTIRELY inside `iframe[name="fullscreen-app-host"]`. See
-`10-canvas-app-conventions` for the required locator pattern.
+## Environments (never production)
 
-## Scope of automation
+| Env | Purpose |
+|-----|---------|
+| DEV | Primary automation target |
+| SIT | System integration |
+| QA  | Quality assurance |
+| UAT | User acceptance |
 
-- Invoice Canvas app **UI** testing.
-- **Dataverse API** data validation (UI counts vs backend counts).
-- **Role-based** testing across personas (see `30-roles-and-security`).
+Each env has its own app URL, Dataverse URL, and auth session (`auth/` is gitignored).
+
+## Automation scope
+
+- Invoice Canvas **UI** testing
+- Dataverse API validation (UI counts vs backend)
+- Role-based testing (PM vs BDU/Admin) — see `30-roles-and-security`
+- Screen/flow behavior — see `50-app-functionality`
