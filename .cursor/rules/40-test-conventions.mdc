@@ -51,27 +51,33 @@ Every test should capture clear, self-explanatory evidence using the shared util
 `tests/utils/screenshot.ts`. NEVER use `locator.screenshot()` for evidence — it crops to the
 element and loses context. Instead:
 
-- `markAndShot(page, target, label, testInfo, options?)` — highlights the element under test
-  (coloured box + caption + spotlight dim) directly ON a full-context `page.screenshot()`, then
-  attaches it to the report. Use one call per scenario/step you want to evidence.
+- `markAndShot(page, target, label, testInfo, options?)` — highlights one element.
+- `markGroupAndShot(page, targets, label, testInfo, options?)` — highlights the **union**
+  bounding box of several elements (nav strips, card rows, open dropdowns, forms). Prefer this
+  when the observation is a group, not a single label.
 - `shot(page, label, testInfo)` — a plain full-context screenshot (e.g. an overview shot).
 
 Rules:
 
-- `target` must be a frame-scoped Locator (`appFrame.getBy...`) so the overlay is injected into
-  the iframe and lines up with the element.
+- `target` / `targets` must be frame-scoped Locators (`appFrame.getBy...`) so the overlay is
+  injected into the iframe and lines up with the element(s).
 - Capture AFTER the scenario has loaded (assert visibility first; wait for real data such as a
   numeric count). Do not screenshot a half-loaded screen.
+- Scroll the group into view (the helper scrolls first/last anchors) before capturing.
+- Prefer **one (or two) group marks per scenario** over many single-label shots.
 - Wrap each captured scenario in a `test.step('<label>')` so the report groups the marked image
   under a readable step. Keep the `label` identical between the step and the screenshot.
 - The utility settles via `requestAnimationFrame` (no `waitForTimeout`).
 
 ```ts
-import { markAndShot, shot } from './utils/screenshot';
+import { markAndShot, markGroupAndShot } from './utils/screenshot';
 
-await test.step('Submitted count', async () => {
-  const row = appFrame.getByText(/\d+\s*Submitted/).first();
-  await expect(row).toBeVisible();
-  await markAndShot(page, row, 'Submitted count', testInfo);
+await test.step('Summary cards', async () => {
+  await markGroupAndShot(
+    page,
+    [totalInvoices, totalPartners, totalProject, totalRevenue],
+    'Summary cards',
+    testInfo,
+  );
 });
 ```
