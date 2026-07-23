@@ -32,7 +32,7 @@ alwaysApply: false
 |-------|---------------|-------|
 | Account (Partner) | `accounts` | Partner dropdown |
 | Project | `dia_projects` | LogicalName `dia_project`; Region `ittdev_region`; Partner lookup `ittdev_account`; Name `dia_projectname`; Status Active |
-| Contract | `ittdev_contracts` | Lookup `ittdev_dia_Project` → Project; `ittdev_StartDate` / `ittdev_EndDate`; `statecode` Active; Name `ittdev_Name` |
+| Contract | `ittdev_contracts` | Lookup `ittdev_dia_Project` → Project; `ittdev_startdate` / `ittdev_enddate`; `statecode` Active; Name `ittdev_name` |
 | Product/Services | `dia_productserviceses` | Name `dia_productservicename`; Rate `dia_productservicerate`; Type `ittdev_productservicetype` (Editable Rate / Non-Editable Rate / Discount) |
 | Billing Info (line items) | `dia_invoicelineitemdetailses` | Qty `dia_quantity`; Rate `dia_rate`; Total `dia_total`; Invoice lookup `dia_invoiceid` |
 | Invoice Filtering Options | `dia_invoicefilteringoptionses` | This Month / Last Month windows for duplicate checks |

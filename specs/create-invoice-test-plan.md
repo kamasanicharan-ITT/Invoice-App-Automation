@@ -16,7 +16,7 @@ Live UI (admin/BDU session, Jul 2026): heading New Invoice; radios Brand New | S
 
 **On project select — Contracts (`ittdev_contract` / EntitySetName `ittdev_contracts`)**
 - Lookup to Project: `ittdev_dia_Project` (relationship `ittdev_Contract_dia_Project_dia_Project`).
-- Date window: `ittdev_StartDate` ≤ Invoice Date ≤ `ittdev_EndDate`; Status Active (`statecode`).
+- Date window: `ittdev_startdate` ≤ Invoice Date ≤ `ittdev_enddate`; Status Active (`statecode`).
 - **0 contracts in range** → `lv_InactiveContract = true`, **project dropdown is Reset** (selection cleared).
 - **>1 contracts in range** → show Contract selector (`lv_SelectContract`); may toast contract type.
 - **Exactly 1** → proceed; toast may show contract type (`ShowContractType`).
