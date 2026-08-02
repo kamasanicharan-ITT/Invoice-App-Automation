@@ -37,16 +37,19 @@ failure → matching `Fail-*` status.
 
 ## Billing / period filters (`dia_invoicedate`)
 
-Not a calendar month for This/Last Month:
+Not a calendar month for This/Last Month. Canvas uses DateAdd to the **6th of the
+current calendar month** → **5th of next month** (inclusive). On calendar days **1–5**,
+“This Month” already points at the *upcoming* cycle; the prior cycle sits under Last Month.
 
 | Period | Range |
 |--------|--------|
-| This Month (current cycle) | 6th current month 00:00 → 5th next month 23:59 |
-| Last Month | 6th previous → 5th current |
+| This Month (current cycle label) | 6th **current calendar** month → 5th next month |
+| Last Month | 6th previous calendar month → 5th current calendar month |
 | Future Months | From 6th of **next** month onward |
 | Quarter / Year to Date, Last Quarter / Year | **Calendar** boundaries (not billing cycle) |
 
-Example (July 2026 This Month): 2026-07-06 → 2026-08-05.
+Example (any day in August 2026 This Month): 2026-08-06 → 2026-09-05.
+Example (July 2026 This Month, days 6–31): 2026-07-06 → 2026-08-05.
 
 ## Screen: Dashboard (default landing)
 
