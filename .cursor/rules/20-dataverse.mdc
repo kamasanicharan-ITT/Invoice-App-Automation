@@ -47,11 +47,16 @@ Fail-Creation, Fail-Update, Fail-Flag, Fail-Approval, Fail-Review`
 
 ## Billing cycle date filter
 
+Dashboard / Overview "This Month" (Canvas DateAdd, inclusive):
+
 ```
-dia_invoicedate ge {6th current month ISO} and dia_invoicedate le {5th next month ISO}
+dia_invoicedate ge {6th of current calendar month} and dia_invoicedate le {5th of next month}
 ```
 
-Use `getBillingCycleDates()` — not calendar month. Period variants: see `50-app-functionality`.
+On days 1–5 of a calendar month this is the upcoming cycle (not the prior 6→5 window).
+Use `getBillingCycleDates()` — mirror Canvas, do not stay on the previous cycle when day < 6.
+
+Failed tile only: also `dia_isreported` blank. Total Tasks UI = TotalTask − TotalReported.
 
 ## Count query pattern
 
