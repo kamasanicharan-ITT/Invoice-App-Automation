@@ -55,6 +55,19 @@ When unsure, measure with MCP (`count()` / evaluate) before swapping strategies.
 Auth via `storageState` in `playwright.config.ts`. NEVER add login code.
 `auth.json` and `auth/` must NEVER be committed.
 
+## Host dialogs (outside Canvas iframe)
+
+Power Apps play host can intermittently show:
+
+1. **Consent** — "Allow Invoice Application to access your data?" → click **Allow**
+2. **Connector alerts** — `[role=alert]` with Close (e.g. Office365Users 404)
+
+Always dismiss via shared helper `tests/utils/host-dialogs.ts`
+(`dismissHostDialogs` / `dismissHostDialogsSettling`) after `goto`/`reload` and in
+`openDashboard` / `openInvoiceOverview` / `openCreateInvoice`. Do **not** click
+"Don't allow". These dialogs live on the **host page**, not only inside
+`fullscreen-app-host`.
+
 ## Live MCP exploration (planner / generator)
 
 - Do NOT `browser_wait_for({ text: "Dashboard" })` — iframe text is invisible at top level.

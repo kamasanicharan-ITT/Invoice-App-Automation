@@ -1,11 +1,14 @@
 // spec: specs/invoice-overview-test-plan.md
 // seed: tests/seed.spec.ts
 //
-// Consolidated Invoice Overview suite (merged from invoice-overview.spec.ts +
-// invoice-overview-cursor-test.spec.ts). Persona: BDU/Admin via storageState.
+// Invoice Overview suite — Admin (auth/admin.json) vs PM (auth/pm.json).
+// Same shell for both; My Invoices / All Invoices radios are Admin-only.
+// Persona is inferred from Playwright project name (same pattern as dashboard.spec.ts).
 
-import { test, expect, type Page, type FrameLocator } from '@playwright/test';
+import { test, expect, type Page, type FrameLocator, type TestInfo } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
+import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
+
 
 const APP_URL =
   'https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a';
@@ -33,45 +36,50 @@ const REGIONS = [
 
 const INVOICE_NUMBER = /\d{4}-\d{4}/;
 
+type Persona = 'admin' | 'pm';
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Persona helpers (mirror dashboard.spec.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function dismissHostAlerts(page: Page): Promise<void> {
-  const hostAlertClose = page.locator('[role="alert"]').getByRole('button', { name: 'Close' });
-  for (let i = 0; i < 3; i++) {
-    if (!(await hostAlertClose.isVisible().catch(() => false))) break;
-    await hostAlertClose.click().catch(() => undefined);
-  }
+function personaFromProjectName(projectName: string): Persona {
+  return projectName.toLowerCase().includes('pm') ? 'pm' : 'admin';
 }
 
-/**
- * Navigate to Invoice Overview. Reloads once if Dashboard never appears
- * (Power Apps "Starting your app..." hang).
- */
+function activePersona(testInfo: TestInfo): Persona {
+  return personaFromProjectName(testInfo.project.name);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function openInvoiceOverview(page: Page): Promise<FrameLocator> {
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
+
+  await dismissHostDialogsSettling(page);
 
   try {
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 60000,
     });
   } catch {
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogsSettling(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
   }
 
-  await dismissHostAlerts(page);
+  await dismissHostDialogs(page);
   await appFrame.getByRole('button', { name: 'Invoice Overview' }).first().click();
+  await dismissHostDialogs(page);
   await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
     timeout: 30000,
   });
 
-  // Wait for gallery data OR empty state before asserting late controls
   await expect
     .poll(
       async () => {
@@ -97,19 +105,21 @@ function regionDropdown(appFrame: FrameLocator) {
 }
 
 function periodButton(appFrame: FrameLocator, label: string) {
-  // Live name is often ". This Month" / ". Last Month"; substring match is enough
   return appFrame.getByRole('button', { name: label });
 }
 
-/** Page-number buttons in the Overview pagination strip (excludes Create Invoice etc.). */
 function pageNumberButtons(appFrame: FrameLocator) {
   return appFrame.getByRole('button', { name: /^\d+$/ });
 }
 
-/**
- * Click the previous-page chevron. Canvas drops page "1" from the strip on later pages,
- * so we click just left of the lowest visible page-number button.
- */
+function scopeRadios(appFrame: FrameLocator) {
+  return {
+    group: appFrame.getByRole('radiogroup'),
+    my: appFrame.getByRole('radio', { name: 'My Invoices' }),
+    all: appFrame.getByRole('radio', { name: 'All Invoices' }),
+  };
+}
+
 async function clickPaginationPrev(page: Page, appFrame: FrameLocator): Promise<void> {
   const lowest = pageNumberButtons(appFrame).first();
   await expect(lowest).toBeVisible({ timeout: 15000 });
@@ -118,7 +128,6 @@ async function clickPaginationPrev(page: Page, appFrame: FrameLocator): Promise<
   await page.mouse.click(box.x - 20, box.y + box.height / 2);
 }
 
-/** Open a combo and assert each option exists (scroll into view — list may clip). */
 async function expectComboOptions(
   appFrame: FrameLocator,
   options: readonly string[]
@@ -136,7 +145,6 @@ async function waitForOverviewSettled(appFrame: FrameLocator): Promise<void> {
   await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
     timeout: 15000,
   });
-  // Avoid locator.or().toBeVisible() — gallery Item + invoice # + empty template can all exist
   await expect
     .poll(
       async () => {
@@ -160,6 +168,13 @@ async function firstInvoiceNumber(appFrame: FrameLocator): Promise<string> {
   return ((await cell.textContent()) || '').trim();
 }
 
+async function overviewHasRows(appFrame: FrameLocator): Promise<boolean> {
+  return (
+    (await appFrame.getByText(INVOICE_NUMBER).count()) > 0 ||
+    (await appFrame.getByText(/^Item\s*\d+/).count()) > 0
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,8 +182,12 @@ async function firstInvoiceNumber(appFrame: FrameLocator): Promise<string> {
 test.describe('Invoice Overview Screen', () => {
   test.describe.configure({ timeout: 120000 });
 
+  // Shared shell for Admin + PM. Radios differ by persona (project storageState).
+
   test('TC-IO-01: Screen layout loads with expected controls', async ({ page }, testInfo) => {
+    const persona = activePersona(testInfo);
     const appFrame = await openInvoiceOverview(page);
+    const radios = scopeRadios(appFrame);
 
     await test.step('Navigation and header', async () => {
       await expect.soft(appFrame.getByRole('button', { name: 'Dashboard' })).toBeVisible();
@@ -193,25 +212,38 @@ test.describe('Invoice Overview Screen', () => {
       );
     });
 
-    await test.step('Scope, filters, and search', async () => {
-      await expect.soft(appFrame.getByRole('radio', { name: 'My Invoices' })).toBeVisible();
-      await expect.soft(appFrame.getByRole('radio', { name: 'All Invoices' })).toBeVisible();
+    await test.step(`Scope radios (${persona}) + filters`, async () => {
+      if (persona === 'admin') {
+        await expect(radios.my).toBeVisible();
+        await expect(radios.all).toBeVisible();
+      } else {
+        // [PM] hidden — My/All radios must not appear
+        await expect(radios.my).toHaveCount(0);
+        await expect(radios.all).toHaveCount(0);
+        await expect(radios.group).toHaveCount(0);
+      }
+
       await expect.soft(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible();
       await expect.soft(appFrame.getByText('Region', { exact: true })).toBeVisible();
       await expect.soft(appFrame.getByPlaceholder('Search')).toBeVisible();
 
-      await markGroupAndShot(
-        page,
-        [
-          appFrame.getByRole('radiogroup'),
-          appFrame.getByText('Show Invoices', { exact: true }),
-          periodButton(appFrame, 'This Month'),
-          appFrame.getByText('Region', { exact: true }),
-          appFrame.getByPlaceholder('Search'),
-        ],
-        'Scope, filters, and search',
-        testInfo
-      );
+      const filterTargets =
+        persona === 'admin'
+          ? [
+              radios.group,
+              appFrame.getByText('Show Invoices', { exact: true }),
+              periodButton(appFrame, 'This Month'),
+              appFrame.getByText('Region', { exact: true }),
+              appFrame.getByPlaceholder('Search'),
+            ]
+          : [
+              appFrame.getByText('Show Invoices', { exact: true }),
+              periodButton(appFrame, 'This Month'),
+              appFrame.getByText('Region', { exact: true }),
+              appFrame.getByPlaceholder('Search'),
+            ];
+
+      await markGroupAndShot(page, filterTargets, `Scope radios (${persona}) + filters`, testInfo);
     });
 
     await test.step('Table headers, rows, and pagination', async () => {
@@ -226,45 +258,87 @@ test.describe('Invoice Overview Screen', () => {
         await expect.soft(appFrame.getByText(header, { exact: true })).toBeVisible();
       }
 
-      await expect.soft(appFrame.getByText(/^Item\s*\d+/).first()).toBeVisible();
-      await expect.soft(appFrame.getByRole('button', { name: '1', exact: true })).toBeVisible();
-
-      await markGroupAndShot(
-        page,
-        [
-          appFrame.getByText('Partner', { exact: true }),
-          appFrame.getByText('Next Step', { exact: true }),
-          appFrame.getByRole('button', { name: '1', exact: true }),
-        ],
-        'Table headers, rows, and pagination',
-        testInfo
-      );
+      const hasRows = await overviewHasRows(appFrame);
+      if (hasRows) {
+        await expect.soft(appFrame.getByText(/^Item\s*\d+/).first()).toBeVisible();
+        await expect.soft(appFrame.getByRole('button', { name: '1', exact: true })).toBeVisible();
+        await markGroupAndShot(
+          page,
+          [
+            appFrame.getByText('Partner', { exact: true }),
+            appFrame.getByText('Next Step', { exact: true }),
+            appFrame.getByRole('button', { name: '1', exact: true }),
+          ],
+          'Table headers, rows, and pagination',
+          testInfo
+        );
+      } else {
+        await expect
+          .soft(appFrame.getByText('No Item to Display', { exact: true }))
+          .toBeVisible();
+        await markGroupAndShot(
+          page,
+          [
+            appFrame.getByText('Partner', { exact: true }),
+            appFrame.getByText('Next Step', { exact: true }),
+            appFrame.getByText('No Item to Display', { exact: true }),
+          ],
+          'Table headers (empty gallery)',
+          testInfo
+        );
+      }
     });
   });
 
   test('TC-IO-02: Admin can switch My Invoices / All Invoices', async ({ page }, testInfo) => {
+    test.skip(activePersona(testInfo) === 'pm', '[PM] My/All radios are hidden — Admin-only');
+
     const appFrame = await openInvoiceOverview(page);
-    const myInvoices = appFrame.getByRole('radio', { name: 'My Invoices' });
-    const allInvoices = appFrame.getByRole('radio', { name: 'All Invoices' });
-    const radioGroup = appFrame.getByRole('radiogroup');
+    const radios = scopeRadios(appFrame);
 
     await test.step('Default is All Invoices', async () => {
-      await expect(allInvoices).toBeChecked();
-      await markGroupAndShot(page, [radioGroup], 'Default is All Invoices', testInfo);
+      await expect(radios.all).toBeChecked();
+      await markGroupAndShot(page, [radios.group], 'Default is All Invoices', testInfo);
     });
 
     await test.step('Switch to My Invoices', async () => {
-      await myInvoices.click();
-      await expect(myInvoices).toBeChecked();
+      await radios.my.click();
+      await expect(radios.my).toBeChecked();
       await waitForOverviewSettled(appFrame);
-      await markGroupAndShot(page, [radioGroup], 'Switch to My Invoices', testInfo);
+      await markGroupAndShot(page, [radios.group], 'Switch to My Invoices', testInfo);
     });
 
     await test.step('Switch back to All Invoices', async () => {
-      await allInvoices.click();
-      await expect(allInvoices).toBeChecked();
+      await radios.all.click();
+      await expect(radios.all).toBeChecked();
       await waitForOverviewSettled(appFrame);
-      await markGroupAndShot(page, [radioGroup], 'Switch back to All Invoices', testInfo);
+      await markGroupAndShot(page, [radios.group], 'Switch back to All Invoices', testInfo);
+    });
+  });
+
+  test('TC-IO-02b: PM does not see My / All Invoices radios', async ({ page }, testInfo) => {
+    test.skip(activePersona(testInfo) === 'admin', '[Admin] radios are visible — PM-only deny');
+
+    const appFrame = await openInvoiceOverview(page);
+    const radios = scopeRadios(appFrame);
+
+    await test.step('My/All radios hidden for PM', async () => {
+      await expect(radios.my).toHaveCount(0);
+      await expect(radios.all).toHaveCount(0);
+      await expect(radios.group).toHaveCount(0);
+      await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible();
+
+      await markGroupAndShot(
+        page,
+        [
+          appFrame.getByText('Invoice Overview').first(),
+          appFrame.getByText('Show Invoices', { exact: true }),
+          appFrame.getByText('Region', { exact: true }),
+          appFrame.getByPlaceholder('Search'),
+        ],
+        'My/All radios hidden for PM',
+        testInfo
+      );
     });
   });
 
@@ -302,10 +376,9 @@ test.describe('Invoice Overview Screen', () => {
     const appFrame = await openInvoiceOverview(page);
 
     await test.step('Region options listed', async () => {
-      await dismissHostAlerts(page);
+      await dismissHostDialogs(page);
       await regionDropdown(appFrame).click();
       await expectComboOptions(appFrame, REGIONS);
-      // Scroll ends into view for evidence — listbox role is flaky on this combo
       const first = appFrame.getByRole('option', { name: 'Australia', exact: true });
       const last = appFrame.getByRole('option', { name: 'UAE', exact: true });
       await first.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -314,7 +387,6 @@ test.describe('Invoice Overview Screen', () => {
     });
 
     await test.step('India applied', async () => {
-      // Re-open if evidence scroll closed the combo
       if ((await appFrame.getByRole('option', { name: 'India', exact: true }).count()) === 0) {
         await regionDropdown(appFrame).click();
         await expect(appFrame.getByRole('option', { name: 'India', exact: true })).toBeVisible({
@@ -337,9 +409,11 @@ test.describe('Invoice Overview Screen', () => {
 
   test('TC-IO-05: Search filters the invoice list', async ({ page }, testInfo) => {
     const appFrame = await openInvoiceOverview(page);
-    const search = appFrame.getByPlaceholder('Search');
+    test.skip(!(await overviewHasRows(appFrame)), 'No invoice rows to search for this persona');
 
+    const search = appFrame.getByPlaceholder('Search');
     let invoiceNumber = '';
+
     await test.step('Capture invoice number from list', async () => {
       const cell = appFrame.getByText(INVOICE_NUMBER).first();
       await expect(cell).toBeVisible({ timeout: 30000 });
@@ -361,14 +435,19 @@ test.describe('Invoice Overview Screen', () => {
   });
 
   test('TC-IO-06: Status drives the correct Next Step action', async ({ page }, testInfo) => {
+    const persona = activePersona(testInfo);
     const appFrame = await openInvoiceOverview(page);
 
-    // Ensure All Invoices so more statuses are likely present
-    const allInvoices = appFrame.getByRole('radio', { name: 'All Invoices' });
-    if (!(await allInvoices.isChecked().catch(() => false))) {
-      await allInvoices.click();
-      await waitForOverviewSettled(appFrame);
+    // Admin: prefer All Invoices for broader statuses. PM has no radios.
+    if (persona === 'admin') {
+      const allInvoices = scopeRadios(appFrame).all;
+      if (!(await allInvoices.isChecked().catch(() => false))) {
+        await allInvoices.click();
+        await waitForOverviewSettled(appFrame);
+      }
     }
+
+    test.skip(!(await overviewHasRows(appFrame)), 'No invoice rows — Next Step mapping N/A');
 
     const mappings: { action: string | RegExp; label: string }[] = [
       { action: 'Review', label: 'Submitted → Review' },
@@ -407,7 +486,9 @@ test.describe('Invoice Overview Screen', () => {
 
   test('TC-IO-07: Pagination navigates between pages', async ({ page }, testInfo) => {
     const appFrame = await openInvoiceOverview(page);
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
+
+    test.skip(!(await overviewHasRows(appFrame)), 'No invoice rows — pagination N/A');
 
     const page1 = appFrame.getByRole('button', { name: '1', exact: true });
     const page2 = appFrame.getByRole('button', { name: '2', exact: true });
@@ -433,7 +514,6 @@ test.describe('Invoice Overview Screen', () => {
       await page2.click();
       await waitForOverviewSettled(appFrame);
       await expect(page2).toBeVisible({ timeout: 15000 });
-      // Gallery should change when enough data exists
       if (page1Invoice) {
         await expect
           .poll(async () => firstInvoiceNumber(appFrame), { timeout: 20000 })
@@ -441,7 +521,6 @@ test.describe('Invoice Overview Screen', () => {
       }
       await markGroupAndShot(page, [page2], 'Page 2 active', testInfo);
 
-      // Page "1" often leaves the pagination strip — use prev chevron and/or content check
       let backOnPage1 = false;
       for (let attempt = 0; attempt < 8; attempt++) {
         if (await page1.isVisible().catch(() => false)) {
@@ -451,7 +530,7 @@ test.describe('Invoice Overview Screen', () => {
           break;
         }
 
-        await dismissHostAlerts(page);
+        await dismissHostDialogs(page);
         await clickPaginationPrev(page, appFrame);
         await waitForOverviewSettled(appFrame);
 
@@ -475,6 +554,7 @@ test.describe('Invoice Overview Screen', () => {
   });
 
   test('TC-IO-08: Create Invoice from Overview opens New Invoice', async ({ page }, testInfo) => {
+    const persona = activePersona(testInfo);
     const appFrame = await openInvoiceOverview(page);
 
     await test.step('Create Invoice opens New Invoice form', async () => {
@@ -482,9 +562,16 @@ test.describe('Invoice Overview Screen', () => {
       await expect(appFrame.getByText('New Invoice', { exact: true })).toBeVisible({
         timeout: 45000,
       });
-      await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible({
-        timeout: 30000,
-      });
+
+      // Adhoc is Admin-elevated; PM may not show the toggle — do not require it for PM
+      if (persona === 'admin') {
+        await expect.soft(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible({
+          timeout: 15000,
+        });
+      }
+
+      await expect(appFrame.getByRole('button', { name: 'Close' })).toBeVisible();
+      await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeVisible();
 
       await markGroupAndShot(
         page,
