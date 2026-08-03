@@ -1,110 +1,148 @@
 # Invoice Overview test plan
 
-## Application Overview
-
-Single source of truth for the **Invoice Overview** screen of the Invoice Canvas app.
-Merged from live Power Apps observation (2026-07-24) plus the prior reference plans
-`invoice-overview-cursor-plan.md` and the older `invoice-overview-test-plan.md` scenarios.
-
-All scenarios live in **one** spec: `tests/invoice-overview.spec.ts`.
-
-**Seed:** `tests/seed.spec.ts`
-
-**Persona (default suite):** BDU + Admin (`storageState` / `auth.json`) — sees **My Invoices** and
-**All Invoices**; default scope is **All Invoices** checked.
-
-**Canvas host:** entire UI inside `iframe[name="fullscreen-app-host"]`.
+**Status:** Source of truth for the Invoice Overview screen (regression + automation)  
+**Spec file:** `tests/invoice-overview.spec.ts`  
+**Seed:** `tests/seed.spec.ts`  
+**App:** Invoice Canvas (Power Apps) — DEV  
+**Last aligned:** 2026-08-03 (Admin vs PM UI difference on My/All radios)
 
 ---
 
-## Live observations (locator / product notes)
+## 1. Purpose and scope
 
-Recorded while exploring the screen; generators and healers must follow these.
+| In scope | Out of scope |
+|----------|--------------|
+| Overview layout, filters, search, table, pagination | Dashboard tiles → `dashboard-test-plan.md` |
+| **Admin** My Invoices / All Invoices radios | Create Invoice form → `create-invoice-test-plan.md` |
+| **PM** — radios **hidden**; own invoices only | Dataverse list-count parity (future) |
+| Period / Region / Search / Next Step / Create Invoice nav | Clicking through Review/Approve flows |
+
+---
+
+## 2. Same shell, different scope UI (core principle)
+
+| Aspect | PM | BDU (Admin) |
+|--------|----|-------------|
+| Nav (Dashboard, Overview, Create Invoice) | Same | Same |
+| Header **Invoice Overview** | Same | Same |
+| **My Invoices / All Invoices** radios | **Hidden** — no radiogroup | **Visible**; default **All Invoices** checked |
+| Show Invoices period filter | Same options (incl. Quater typos) | Same |
+| Region filter (8 regions) | Same | Same |
+| Search | Same | Same |
+| Table columns | Same | Same |
+| Next Step by status | Same mapping when rows exist | Same |
+| Pagination | Same (may have fewer pages as PM) | Same |
+| List data | Own invoices only | Org-wide when All selected |
+
+Implications:
+
+- Shared cases (layout filters, period, region, search, Next Step, pagination, Create Invoice) run under **both** `chromium-admin` and `chromium-pm` with the **same expects**, except radio visibility.
+- **TC-IO-02** (switch My ↔ All) is **Admin only** — skipped for PM.
+- **TC-IO-02b** (radios absent) is **PM only** — skipped for Admin (or folded into layout via persona branch).
+
+---
+
+## 3. Personas and authentication
+
+| Persona | storageState | Playwright project |
+|---------|--------------|--------------------|
+| BDU/Admin | `auth/admin.json` | `chromium` / `chromium-admin` |
+| PM | `auth/pm.json` | `chromium-pm` |
+
+```bash
+npx playwright test tests/invoice-overview.spec.ts --project=chromium-admin
+npx playwright test tests/invoice-overview.spec.ts --project=chromium-pm
+npx playwright test tests/invoice-overview.spec.ts --project=chromium-admin --project=chromium-pm
+```
+
+Detect persona in code from `testInfo.project.name` (contains `pm` → PM, else Admin) — same pattern as Dashboard.
+
+---
+
+## 4. Live observations (locator notes)
 
 | Control | Live behavior |
 |---------|----------------|
-| Nav | `Dashboard`, `Invoice Overview`, `Create Invoice` buttons |
-| Header | Text **Invoice Overview**; header **+ Create Invoice** |
-| Scope | `radiogroup` with radios **My Invoices** / **All Invoices**; Admin default = All checked |
-| Period | Label **Show Invoices**. Combo button accessible name is `". This Month"` (leading `. `); Playwright `getByRole('button', { name: 'This Month' })` still matches. Options: This Month, Last Month, **Quater to Date**, **Last Quater**, Year to Date, Last Year, Future Months (app typos) |
-| Region | Label **Region**. Unselected button name is exactly `"."` — unique vs period’s `". This Month"` |
-| Search | `textbox` placeholder **Search** (Partner, Project, Invoice #) |
-| Table | Headers: Partner, Project, Invoice #, Action Pending with, Status, Next Step. Rows: `Item N` / invoice `#` like `\d{4}-\d{4}` |
-| Next Step | Driven by Status — observed: **Reviewed → Approve**, **Submitted → Review**, **Flagged → Edit**, **Fail-Creation → Report**. Product also: Approved/Sent → View, Draft → Edit/none (assert when present; do not hard-fail if a status is absent this cycle) |
-| Pagination | Page buttons `1`, `2`, `3`, … at bottom |
-| Refresh | No accessible **Refresh Invoices** label found on the live screen; do **not** assert a Refresh button unless re-observed |
-| Empty | Message **No Item to Display** only when the gallery has no rows |
+| Canvas host | Entire UI in `iframe[name="fullscreen-app-host"]` |
+| Period | Button often `". This Month"`; options include **Quater to Date** / **Last Quater** |
+| Region | Unselected name exactly `"."` |
+| Search | Placeholder **Search** |
+| Invoice # | `/\d{4}-\d{4}/` |
+| Next Step | Reviewed→Approve, Submitted→Review, Flagged→Edit, Fail-*→Report, Approved/Sent→View |
+| Empty | **No Item to Display** when gallery has no rows |
+| Refresh | No accessible Refresh label — do not assert |
 
 ---
 
-## Test Scenarios
+## 5. Test scenarios
 
-### 1. Invoice Overview Screen
+### Shared UI (both personas)
 
 #### TC-IO-01 — Screen layout loads with expected controls
 
-Persona: BDU/Admin (also valid structurally for PM, except My/All radios — see TC-IO-02).
-
-1. Open the app and navigate to Invoice Overview (wait for real row data, e.g. invoice `#`).
-   - expect: Nav **Dashboard**, **Invoice Overview**, **Create Invoice** visible
-   - expect: Header **Invoice Overview**; scope radios **My Invoices** / **All Invoices**
-   - expect: **Show Invoices**, **Region**, Search box visible
-   - expect: Table headers Partner, Project, Invoice #, Action Pending with, Status, Next Step
-   - expect: At least one gallery row (`Item N` or invoice number) and pagination control `1`
-   - evidence: mark nav + scope + filters + table headers as groups
-
-#### TC-IO-02 — Admin can switch My Invoices / All Invoices
-
-Persona: BDU/Admin — **visible**; PM would hide radios (future `auth/pm.json` run).
-
-1. Observe default scope.
-   - expect: **All Invoices** is checked
-2. Select **My Invoices**.
-   - expect: My Invoices checked; list still on Overview (rows or empty-state text)
-3. Switch back to **All Invoices**.
-   - expect: All Invoices checked; list refreshes without leaving Overview
-   - evidence: mark radiogroup after each selection
+1. Open Overview (wait for rows or empty state).
+   - expect: Nav + header visible
+   - expect **[Admin]:** My Invoices + All Invoices radios **visible**
+   - expect **[PM]:** My Invoices + All Invoices radios **hidden** (count 0 / not visible)
+   - expect: Show Invoices, Region, Search, table headers
+   - expect: gallery row **or** empty state; pagination `1` when rows exist
+   - evidence: mark nav; mark filters; mark scope radios (Admin) or header without radios (PM)
 
 #### TC-IO-03 — Show Invoices period filter
 
-1. Open the period combo (This Month).
-   - expect: Options This Month, Last Month, Quater to Date, Last Quater, Year to Date, Last Year, Future Months
-2. Select **Last Month**.
-   - expect: Period button shows Last Month; screen stays on Invoice Overview
-   - evidence: mark open listbox, then applied Last Month button
+1. Open period combo → all 7 options (incl. Quater typos).
+2. Select Last Month → stays on Overview.
+   - both personas
 
 #### TC-IO-04 — Region filter
 
-1. Open Region (button `.`).
-   - expect: Australia, Colombia, India, Netherlands, North America, Saudi Arabia, South Korea, UAE
-2. Select **India**.
-   - expect: Region shows India; Overview remains; list refreshes (rows or empty)
-   - evidence: mark open listbox, then India button
+1. Open Region → 8 regions.
+2. Select India → Overview remains.
+   - both personas
 
 #### TC-IO-05 — Search filters the invoice list
 
-1. Read a live invoice number from the gallery (`/\d{4}-\d{4}/`).
-2. Type it into Search.
-   - expect: Search has that value; at least one matching row remains visible
-   - evidence: mark Search + matching invoice text
+1. Capture a live invoice `#` when rows exist; else skip.
+2. Search → matching row remains.
+   - both personas (PM may skip if no rows)
 
 #### TC-IO-06 — Status drives the correct Next Step action
 
-1. On All Invoices / This Month (or current filters), inspect Next Step buttons.
-   - expect (soft / when present): **Review** (Submitted), **Approve** (Reviewed), **Edit** (Flagged), **Report** (Fail-*)
-   - do not click through to detail in this scenario (visibility mapping only)
-   - evidence: mark each present Next Step control found
+1. **[Admin]** Prefer All Invoices for broader statuses.
+2. Soft-assert Review / Approve / Edit / Report / View when present (≥1 required if rows exist).
+   - both personas; skip if empty gallery
 
 #### TC-IO-07 — Pagination navigates between pages
 
-1. Observe pagination.
-   - expect: Page **1** visible; page **2** when enough data (skip nav if only one page)
-2. Click page **2**, then return to **1** when both exist.
-   - expect: Gallery still shows invoice data after each click; stay on Overview
-   - evidence: mark active page button
+1. Page 1 visible; page 2 when enough data (annotate + return if only one page).
+2. Navigate 2 → back to 1 (page button or prev chevron).
+   - both personas
 
 #### TC-IO-08 — Create Invoice from Overview opens New Invoice
 
-1. Click header **Create Invoice**.
-   - expect: **New Invoice** form visible (Create Invoice screen)
-   - evidence: mark New Invoice + Close/Submit region
+1. Click Create Invoice → **New Invoice** visible.
+   - **[Admin]** Adhoc Invoice label may be visible
+   - **[PM]** do not require Adhoc toggle/controls
+   - both personas: Close + Submit visible
+
+### Admin-only
+
+#### TC-IO-02 — Admin can switch My Invoices / All Invoices
+
+Persona: **Admin** (`[Admin] allow`). Skip on PM.
+
+1. Default All Invoices checked.
+2. Switch My → list settles on Overview.
+3. Switch All → list settles.
+   - evidence: radiogroup after each change
+
+### PM-only
+
+#### TC-IO-02b — PM does not see My / All Invoices radios
+
+Persona: **PM** (`[PM] hidden`). Skip on Admin.
+
+1. Open Overview.
+   - expect: radiogroup / My Invoices / All Invoices **not visible**
+   - expect: Show Invoices + table still usable
+   - evidence: mark header + filters without radios
