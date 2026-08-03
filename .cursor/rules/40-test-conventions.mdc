@@ -33,7 +33,9 @@ Generated specs begin with the plan + seed reference comments:
 ## Helper functions (reuse; do not reinvent)
 
 - `openDashboard(page)` — navigates to app URL, waits for `Dashboard`, returns `appFrame`.
-- `openCreateInvoice(page)` — navigates, clicks Create Invoice, returns `appFrame`.
+- `openCreateInvoice(page)` / Overview open helpers — same pattern; all call
+  `dismissHostDialogs` / `dismissHostDialogsSettling` from `tests/utils/host-dialogs.ts`
+  to click **Allow** on the intermittent Power Apps consent dialog and close host alerts.
 - `getBillingCycleDates()` — returns `{ start, end }` ISO dates for the current billing cycle.
 - `getDataverseCount(token, filterExpression)` — calls Dataverse with filter, returns count.
 - `getDashboardTaskCount(page, appFrame, labelPattern)` — reads a numeric count from the

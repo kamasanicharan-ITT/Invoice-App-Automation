@@ -3,6 +3,8 @@
 
 import { test, expect, request, type Page, type FrameLocator, type Request, type TestInfo } from '@playwright/test';
 import { markAndShot, markGroupAndShot, shot } from './utils/screenshot';
+import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
+
 
 const APP_URL =
   'https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a';
@@ -396,51 +398,48 @@ async function waitForDashboardReady(appFrame: FrameLocator): Promise<void> {
   await expect(appFrame.getByText(/\d+\s*Drafts?/).first()).toBeVisible({ timeout: 60000 });
 }
 
-async function dismissHostAlerts(page: Page): Promise<void> {
-  const hostAlertClose = page.locator('[role="alert"]').getByRole('button', { name: 'Close' });
-  for (let i = 0; i < 3; i++) {
-    if (!(await hostAlertClose.isVisible().catch(() => false))) break;
-    await hostAlertClose.click().catch(() => undefined);
-  }
-}
-
 /**
  * Navigates to the app and waits until the Dashboard (including task counts) is ready.
- * Reloads once if Power Apps sticks on "Starting your app..." or the 0-count placeholder.
+ * Reloads once if Power Apps sticks on "Starting your app...", consent, or the 0-count placeholder.
  */
 async function openDashboard(page: Page): Promise<FrameLocator> {
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
+
+  // Consent / host alerts can appear right after play host loads
+  await dismissHostDialogsSettling(page);
 
   try {
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 60000,
     });
   } catch {
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogsSettling(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
   }
 
-  await dismissHostAlerts(page);
+  await dismissHostDialogs(page);
 
   try {
     await waitForDashboardReady(appFrame);
   } catch {
-    // Stuck on "0 Total Task" placeholder or host alert — one recovery reload
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogsSettling(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await waitForDashboardReady(appFrame);
   }
 
   return appFrame;
 }
+
 
 /**
  * Reads the numeric count for a matching Invoice Tasks label after the section is ready.
