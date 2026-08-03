@@ -1,8 +1,9 @@
 // spec: specs/create-invoice-test-plan.md
 // seed: tests/seed.spec.ts
 
-import { test, expect, type Page, type FrameLocator } from '@playwright/test';
+import { test, expect, type Page, type FrameLocator, type TestInfo } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
+import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
 import {
   APP_URL,
   captureDataverseToken,
@@ -18,7 +19,6 @@ const LINE_DESCRIPTION = 'Automation line item — Create Invoice suite';
 /** Line/grand totals may render as $ (NA) or ₹ (India) depending on project region. */
 const MONEY = /(?:\$|₹)\s*[1-9]\d*/;
 
-
 /** Known Create Invoice notifications after Partner/Project OnChange or Submit. */
 const TOAST = {
   noLastInvoice: /No invoice has been generated for this project over the last month/i,
@@ -31,14 +31,29 @@ const DUPLICATE = {
 } as const;
 
 type ProjectSelectOutcome = 'duplicate' | 'no-last-invoice' | 'clear';
+type Persona = 'admin' | 'pm';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Persona helpers (mirror dashboard / invoice-overview)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function personaFromProjectName(projectName: string): Persona {
+  return projectName.toLowerCase().includes('pm') ? 'pm' : 'admin';
+}
+
+function activePersona(testInfo: TestInfo): Persona {
+  return personaFromProjectName(testInfo.project.name);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UI helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function openCreateInvoice(page: Page): Promise<FrameLocator> {
+async function openCreateInvoice(page: Page, persona: Persona = 'admin'): Promise<FrameLocator> {
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
+
+  await dismissHostDialogsSettling(page);
 
   // Power Apps host can sit on "Starting your app..." — one reload if Dashboard never appears
   try {
@@ -46,53 +61,54 @@ async function openCreateInvoice(page: Page): Promise<FrameLocator> {
       timeout: 60000,
     });
   } catch {
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogsSettling(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
   }
 
+  await dismissHostDialogs(page);
   await appFrame.getByRole('button', { name: 'Create Invoice' }).last().click();
+  await dismissHostDialogs(page);
 
   try {
-    await waitForCreateInvoiceReady(page, appFrame);
+    await waitForCreateInvoiceReady(page, appFrame, persona);
   } catch {
     // Stuck / partial load (or host error loop): one recovery path, then fail if still not ready
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogsSettling(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
     await appFrame.getByRole('button', { name: 'Create Invoice' }).last().click();
-    await waitForCreateInvoiceReady(page, appFrame);
+    await dismissHostDialogs(page);
+    await waitForCreateInvoiceReady(page, appFrame, persona);
   }
   return appFrame;
 }
 
-async function dismissHostAlerts(page: Page): Promise<void> {
-  const hostAlertClose = page.locator('[role="alert"]').getByRole('button', { name: 'Close' });
-  for (let i = 0; i < 3; i++) {
-    if (!(await hostAlertClose.isVisible().catch(() => false))) break;
-    await hostAlertClose.click().catch(() => undefined);
-  }
-}
-
 /**
  * Wait until New Invoice is interactive. Bounded timeouts — never hang forever on a stuck app.
+ * Adhoc Invoice is Admin-only — do not require it for PM.
  */
 async function waitForCreateInvoiceReady(
   page: Page,
-  appFrame: FrameLocator
+  appFrame: FrameLocator,
+  persona: Persona = 'admin'
 ): Promise<void> {
-  await dismissHostAlerts(page);
+  await dismissHostDialogs(page);
 
   await expect(appFrame.getByText('New Invoice', { exact: true })).toBeVisible({
     timeout: 45000,
   });
-  await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible({
-    timeout: 30000,
-  });
+  if (persona === 'admin') {
+    await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible({
+      timeout: 30000,
+    });
+  }
   await expect(appFrame.getByText('Send Instantly', { exact: true })).toBeVisible({
     timeout: 15000,
   });
@@ -112,7 +128,7 @@ async function waitForCreateInvoiceReady(
   await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeVisible({
     timeout: 15000,
   });
-  await dismissHostAlerts(page);
+  await dismissHostDialogs(page);
 }
 
 async function getLineItemCount(appFrame: FrameLocator): Promise<number> {
@@ -229,9 +245,13 @@ async function setToggle(
   const labelLoc = appFrame.getByText(label, { exact: true });
   await expect(labelLoc).toBeVisible({ timeout: 20000 });
 
-  // Prefer accessible name from aria-describedby; fall back to switch index
+  // Prefer accessible name from aria-describedby; fall back to switch index.
+  // PM has no Adhoc toggle — Send Instantly is switch index 0.
   const named = appFrame.getByRole('switch', { name: new RegExp(label, 'i') });
-  const switchIndex = label === 'Adhoc Invoice' ? 0 : 1;
+  const adhocVisible =
+    (await appFrame.getByText('Adhoc Invoice', { exact: true }).count()) > 0;
+  const switchIndex =
+    label === 'Adhoc Invoice' ? 0 : adhocVisible ? 1 : 0;
   const switchCtrl =
     (await named.count()) > 0 ? named.first() : appFrame.getByRole('switch').nth(switchIndex);
   await expect(switchCtrl).toBeVisible({ timeout: 20000 });
@@ -498,7 +518,8 @@ test.describe('Create Invoice Screen', () => {
   // ── Pure UI (no Dataverse names required) ────────────────────────────────
 
   test('TC-CI-01: New Invoice form loads with all expected controls', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const persona = activePersona(testInfo);
+    const appFrame = await openCreateInvoice(page, persona);
 
     await expect.soft(appFrame.getByText('New Invoice', { exact: true })).toBeVisible();
     await expect.soft(appFrame.getByRole('button', { name: 'Dashboard' })).toBeVisible();
@@ -508,7 +529,11 @@ test.describe('Create Invoice Screen', () => {
     await expect
       .soft(appFrame.getByRole('radio', { name: 'Start with last invoice' }))
       .toBeVisible();
-    await expect.soft(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible();
+    if (persona === 'admin') {
+      await expect.soft(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible();
+    } else {
+      await expect.soft(appFrame.getByText('Adhoc Invoice', { exact: true })).toHaveCount(0);
+    }
     await expect.soft(appFrame.getByText('Send Instantly', { exact: true })).toBeVisible();
     await expect.soft(appFrame.getByPlaceholder('Invoice number')).toBeVisible();
     await expect.soft(appFrame.getByPlaceholder('PO number')).toBeVisible();
@@ -544,12 +569,18 @@ test.describe('Create Invoice Screen', () => {
   });
 
   test('TC-CI-02: Default field states match product rules', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const persona = activePersona(testInfo);
+    const appFrame = await openCreateInvoice(page, persona);
 
     await expect(appFrame.getByRole('radio', { name: 'Start with last invoice' })).toBeChecked();
-    await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible();
-    await expect(appFrame.getByRole('switch').first()).not.toBeChecked();
-    await expect(appFrame.getByRole('switch').nth(1)).not.toBeChecked();
+    if (persona === 'admin') {
+      await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible();
+      await expect(appFrame.getByRole('switch').first()).not.toBeChecked();
+      await expect(appFrame.getByRole('switch').nth(1)).not.toBeChecked();
+    } else {
+      await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toHaveCount(0);
+      await expect(appFrame.getByRole('switch').first()).not.toBeChecked();
+    }
     await expect(appFrame.getByPlaceholder('Invoice number')).toBeDisabled();
     await expect(appFrame.getByPlaceholder('PO number')).toBeDisabled();
     await expect(appFrame.getByPlaceholder('mm/dd/yyyy').first()).not.toHaveValue('');
@@ -563,26 +594,24 @@ test.describe('Create Invoice Screen', () => {
     await expect(appFrame.getByRole('button', { name: 'Find Project' })).toBeVisible();
 
     await test.step('Default form states', async () => {
-      await markGroupAndShot(
-        page,
-        [
-          appFrame.getByText('New Invoice', { exact: true }),
-          appFrame.getByRole('radio', { name: 'Start with last invoice' }),
-          appFrame.getByText('Adhoc Invoice', { exact: true }),
-          appFrame.getByRole('switch').first(),
-          appFrame.getByPlaceholder('Invoice number'),
-          appFrame.getByRole('button', { name: 'Find Partner' }),
-          appFrame.getByRole('button', { name: 'Save Draft' }),
-          appFrame.getByRole('button', { name: 'Submit' }),
-        ],
-        'Default form states',
-        testInfo
-      );
+      const marks = [
+        appFrame.getByText('New Invoice', { exact: true }),
+        appFrame.getByRole('radio', { name: 'Start with last invoice' }),
+        appFrame.getByRole('switch').first(),
+        appFrame.getByPlaceholder('Invoice number'),
+        appFrame.getByRole('button', { name: 'Find Partner' }),
+        appFrame.getByRole('button', { name: 'Save Draft' }),
+        appFrame.getByRole('button', { name: 'Submit' }),
+      ];
+      if (persona === 'admin') {
+        marks.splice(2, 0, appFrame.getByText('Adhoc Invoice', { exact: true }));
+      }
+      await markGroupAndShot(page, marks, 'Default form states', testInfo);
     });
   });
 
   test('TC-CI-03: Close returns to prior screen', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     const landed = await closeToPriorScreen(appFrame);
 
     await test.step(`Returned to ${landed} after Close`, async () => {
@@ -614,7 +643,7 @@ test.describe('Create Invoice Screen', () => {
   test('TC-CI-10: Brand New vs Start with last invoice selection (Adhoc OFF)', async ({
     page,
   }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
 
     await appFrame.getByRole('radio', { name: 'Brand New' }).click();
     await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
@@ -636,7 +665,9 @@ test.describe('Create Invoice Screen', () => {
   });
 
   test('TC-CI-11: Adhoc ON forces Brand New', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc toggle is hidden — Admin-only');
+
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
 
     await setAdhoc(appFrame, true);
     await expect(appFrame.getByRole('switch').first()).toBeChecked();
@@ -661,9 +692,38 @@ test.describe('Create Invoice Screen', () => {
     });
   });
 
+  test('TC-CI-11b: PM does not see Adhoc Invoice toggle', async ({ page }, testInfo) => {
+    test.skip(activePersona(testInfo) === 'admin', '[Admin] Adhoc is visible — PM-only deny');
+
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+
+    await test.step('Adhoc hidden for PM; core create controls remain', async () => {
+      await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toHaveCount(0);
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeVisible();
+      await expect(appFrame.getByRole('radio', { name: 'Start with last invoice' })).toBeVisible();
+      await expect(appFrame.getByText('Send Instantly', { exact: true })).toBeVisible();
+
+      await markGroupAndShot(
+        page,
+        [
+          appFrame.getByText('New Invoice', { exact: true }),
+          appFrame.getByRole('radio', { name: 'Brand New' }),
+          appFrame.getByRole('radio', { name: 'Start with last invoice' }),
+          appFrame.getByText('Send Instantly', { exact: true }),
+        ],
+        'PM Create Invoice without Adhoc',
+        testInfo
+      );
+    });
+  });
+
   test('TC-CI-12: Send Instantly toggle works for all users', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
-    const sendSwitch = appFrame.getByRole('switch').nth(1);
+    const persona = activePersona(testInfo);
+    const appFrame = await openCreateInvoice(page, persona);
+    const sendSwitch =
+      persona === 'admin'
+        ? appFrame.getByRole('switch').nth(1)
+        : appFrame.getByRole('switch').first();
 
     await setSendInstantly(appFrame, true);
     await expect(sendSwitch).toBeChecked({ timeout: 10000 });
@@ -684,7 +744,7 @@ test.describe('Create Invoice Screen', () => {
   });
 
   test('TC-CI-20: Partner dropdown opens with options', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     const findPartner = appFrame.getByRole('button', { name: 'Find Partner' });
     await findPartner.click();
 
@@ -708,7 +768,7 @@ test.describe('Create Invoice Screen', () => {
   });
 
   test('TC-CI-30: Add and delete line item rows', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await ensureLineItemRow(appFrame);
     const gallery = appFrame.getByRole('list', { name: 'Gallery' });
     const initialDeletes = await appFrame.getByRole('img', { name: /delete/i }).count();
@@ -754,7 +814,7 @@ test.describe('Create Invoice Screen', () => {
   });
 
   test('TC-CI-34: Internal Notes accepts text', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     const notesLabel = appFrame.getByText('Internal Notes', { exact: true });
     await expect(notesLabel).toBeVisible();
 
@@ -783,7 +843,7 @@ test.describe('Create Invoice Screen', () => {
   });
 
   test('TC-CI-70: Submit blocked when Partner/Project missing', async ({ page }, testInfo) => {
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
 
     await test.step('Submit disabled without Partner/Project', async () => {
@@ -809,7 +869,7 @@ test.describe('Create Invoice Screen', () => {
     const project = fixtures.noLastMonthInvoice;
     test.skip(!project, 'No Active project without last-month invoices in Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await appFrame.getByRole('radio', { name: 'Start with last invoice' }).click();
     const outcome = await selectPartnerAndProject(appFrame, project!);
     test.skip(outcome === 'duplicate', 'Fixture unexpectedly hit Duplicate Project!');
@@ -847,7 +907,7 @@ test.describe('Create Invoice Screen', () => {
     );
     test.skip(!project, 'No Active partner/project fixture from Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await selectPartner(appFrame, project!.partnerName);
     await appFrame.getByRole('button', { name: 'Find Project' }).click();
 
@@ -880,7 +940,7 @@ test.describe('Create Invoice Screen', () => {
     test.skip(!project, 'No Active project fixture from Dataverse');
     test.skip(!product, 'No Editable Rate product in Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await appFrame.getByRole('radio', { name: 'Brand New' }).click();
     const outcome = await selectPartnerAndProject(appFrame, project!);
     expect(outcome, 'Eligible fixture must not show Duplicate Project!').not.toBe('duplicate');
@@ -933,7 +993,7 @@ test.describe('Create Invoice Screen', () => {
     test.skip(!project, 'No Active project fixture from Dataverse');
     test.skip(!product, 'No Non-Editable Rate product in Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     const outcome = await selectPartnerAndProject(appFrame, project!);
     expect(outcome, 'Fixture must not show Duplicate Project!').not.toBe('duplicate');
 
@@ -971,7 +1031,7 @@ test.describe('Create Invoice Screen', () => {
     const project = fixtures.northAmerica;
     test.skip(!project, 'No North America Active project with contract in Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await expect(appFrame.getByRole('button', { name: 'Find Tax' })).toHaveCount(0);
 
     const outcome = await selectPartnerAndProject(appFrame, project!);
@@ -1007,7 +1067,7 @@ test.describe('Create Invoice Screen', () => {
     test.skip(!naEligible, 'No North America project fixture from Dataverse');
     test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await appFrame.getByRole('radio', { name: 'Brand New' }).click();
     await setAdhoc(appFrame, false);
 
@@ -1058,6 +1118,7 @@ test.describe('Create Invoice Screen', () => {
   test('TC-CI-42: Create and Submit adhoc NA invoice with tax selected', async ({
     page,
   }, testInfo) => {
+    test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc create is Admin-only');
     test.skip(!dataverseToken, 'No Dataverse token');
     test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
 
@@ -1076,7 +1137,7 @@ test.describe('Create Invoice Screen', () => {
     );
     test.skip(uniqueNa.length === 0, 'No North America project fixture from Dataverse');
 
-    const appFrame = await openCreateInvoice(page);
+    const appFrame = await openCreateInvoice(page, activePersona(testInfo));
     await setAdhoc(appFrame, true);
     await expect(appFrame.getByRole('switch').first()).toBeChecked();
     await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
@@ -1173,7 +1234,7 @@ test.describe('Create Invoice Screen', () => {
       test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
 
       const product = fixtures.editableProduct!;
-      const appFrame = await openCreateInvoice(page);
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       await setAdhoc(appFrame, false);
 
@@ -1250,7 +1311,7 @@ test.describe('Create Invoice Screen', () => {
         'No project with an existing non-adhoc invoice in the duplicate window'
       );
 
-      const appFrame = await openCreateInvoice(page);
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       const outcome = await selectPartnerAndProject(appFrame, host!);
       expect(
@@ -1275,6 +1336,7 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('TC-CI-60: Create and Submit adhoc invoice', async ({ page }, testInfo) => {
+      test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc create is Admin-only');
       test.skip(!dataverseToken, 'No Dataverse token');
       // Prefer eligible (no blocking non-adhoc) first — UI may still show Duplicate on some projects
       const candidates = [
@@ -1286,7 +1348,7 @@ test.describe('Create Invoice Screen', () => {
       test.skip(candidates.length === 0, 'No Active project fixture from Dataverse');
       test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
 
-      const appFrame = await openCreateInvoice(page);
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await setAdhoc(appFrame, true);
       await expect(appFrame.getByRole('switch').first()).toBeChecked({ timeout: 15000 });
       await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked({

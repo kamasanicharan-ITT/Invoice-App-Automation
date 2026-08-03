@@ -10,6 +10,7 @@ import {
   type Request,
 } from '@playwright/test';
 import { markGroupAndShot, shot } from './utils/screenshot';
+import { dismissHostDialogs } from './utils/host-dialogs';
 import {
   APP_URL,
   DATAVERSE_URL,
@@ -608,16 +609,8 @@ function logNetworkHits(label: string, hits: CapturedFlowCall[]): void {
 
 // ── UI helpers (minimal subset for adhoc Submit) ─────────────────────────────
 
-async function dismissHostAlerts(page: Page): Promise<void> {
-  const hostAlertClose = page.locator('[role="alert"]').getByRole('button', { name: 'Close' });
-  for (let i = 0; i < 3; i++) {
-    if (!(await hostAlertClose.isVisible().catch(() => false))) break;
-    await hostAlertClose.click().catch(() => undefined);
-  }
-}
-
 async function waitForCreateInvoiceReady(page: Page, appFrame: FrameLocator): Promise<void> {
-  await dismissHostAlerts(page);
+  await dismissHostDialogs(page);
   await expect(appFrame.getByText('New Invoice', { exact: true })).toBeVisible({
     timeout: 45000,
   });
@@ -644,27 +637,33 @@ async function waitForCreateInvoiceReady(page: Page, appFrame: FrameLocator): Pr
 async function openCreateInvoice(page: Page): Promise<FrameLocator> {
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
+  await dismissHostDialogs(page);
   try {
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 60000,
     });
   } catch {
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogs(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
   }
+  await dismissHostDialogs(page);
   await appFrame.getByRole('button', { name: 'Create Invoice' }).last().click();
+  await dismissHostDialogs(page);
   try {
     await waitForCreateInvoiceReady(page, appFrame);
   } catch {
-    await dismissHostAlerts(page);
+    await dismissHostDialogs(page);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogs(page);
     await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
       timeout: 90000,
     });
     await appFrame.getByRole('button', { name: 'Create Invoice' }).last().click();
+    await dismissHostDialogs(page);
     await waitForCreateInvoiceReady(page, appFrame);
   }
   return appFrame;

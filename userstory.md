@@ -241,7 +241,7 @@ Legacy `.cursorrules` is replaced by the `.mdc` rules above. `.github/agents/*.a
 - **Dashboard under PM** — filters implemented for user scope; full dual-project green runs depend on valid `auth/pm.json` and live PM data.
 - **Flow tracking** (`tests/flow-tracking.spec.ts`) — exploratory classify + adhoc submit network/flowruns; not regression gate.
 - **Dataverse schema/explorer specs** — discovery aids; not product regression.
-- **Older Create Invoice specs** — `create-invoice-adhoc.spec.ts`, `create-invoice-screen.spec.ts` are earlier iterations; prefer `create-invoice.spec.ts`.
+- **Create Invoice** — single suite `tests/create-invoice.spec.ts` + plan `specs/create-invoice-test-plan.md` (Admin vs PM; Adhoc Admin-only).
 
 ### What is NOT done (Phase 2+)
 

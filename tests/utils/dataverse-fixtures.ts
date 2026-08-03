@@ -112,6 +112,10 @@ export async function captureDataverseToken(
 
   await page.goto(appUrl, { waitUntil: 'domcontentloaded' });
 
+  // Consent / host alerts can block Dashboard paint and token capture
+  const { dismissHostDialogsSettling } = await import('./host-dialogs');
+  await dismissHostDialogsSettling(page);
+
   // Dashboard paint forces Canvas Dataverse traffic that carries the Bearer token
   const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
   try {
@@ -119,6 +123,7 @@ export async function captureDataverseToken(
       timeout: 60000,
     });
   } catch {
+    await dismissHostDialogsSettling(page);
     console.log('Dashboard not visible during token capture (auth may be expired)');
   }
 
