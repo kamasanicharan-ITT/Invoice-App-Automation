@@ -1,15 +1,11 @@
 /**
  * Dataverse fixture helpers for Create Invoice (Bearer token + OData Web API).
- * No Dataverse MCP — same auth pattern as Dashboard validation.
+ * Discovers partners/projects/contracts in the active ENV's Dataverse — no hardcoded seed names.
  */
 import { request, type Browser, type Request } from '@playwright/test';
+import { APP_URL, DATAVERSE_URL } from '../../config/env';
 
-export const APP_URL =
-  process.env.APP_URL ??
-  'https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a';
-
-export const DATAVERSE_URL =
-  process.env.DATAVERSE_URL ?? 'https://dev-itt-apps.crm8.dynamics.com';
+export { APP_URL, DATAVERSE_URL };
 
 /** Picklist values for dia_productservices.ittdev_productservicetype (DEV). */
 export const PRODUCT_TYPE = {

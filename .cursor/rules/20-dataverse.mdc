@@ -6,10 +6,13 @@ alwaysApply: false
 
 # Dataverse Backend
 
-- Dev Dataverse URL: `https://dev-itt-apps.crm8.dynamics.com`
+- Active Dataverse URL comes from `config/env.ts` (`DATAVERSE_URL` / `ENV=dev|sit|qa|uat`).
+- DEV default: `https://dev-itt-apps.crm8.dynamics.com`
 - Invoice display name: Invoice Details
 - EntitySetName: `dia_invoicedetailses`
 - Primary key: `dia_invoicedetailsid`
+- Partners/projects/contracts differ per env — create seed data in that org, then discover
+  via OData fixtures (`tests/utils/dataverse-fixtures.ts`). Never hardcode DEV GUIDs/names.
 
 ## Key columns
 

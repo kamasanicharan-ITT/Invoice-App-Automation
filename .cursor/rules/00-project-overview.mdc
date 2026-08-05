@@ -19,21 +19,23 @@ The **Synergy** program has two interconnected Power Apps sharing one Dataverse 
 ## Invoice app technical entry
 
 - Renders ENTIRELY inside `iframe[name="fullscreen-app-host"]` (see `10-canvas-app-conventions`).
-- Dev URL:
-  `https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a`
-- Tenant ID: `18323149-cc4d-4bff-809d-3eda6caec73a`
+- URLs come from `config/env.ts` via `ENV=dev|sit|qa|uat` (never prod).
+- DEV defaults are in that file; SIT/QA/UAT are filled when available (or via `APP_URL` /
+  `DATAVERSE_URL` overrides).
 - Auth: Azure AD (+ MFA). Backend: Dataverse (`https://{org}.crm8.dynamics.com`).
 
 ## Environments (never production)
 
-| Env | Purpose |
-|-----|---------|
-| DEV | Primary automation target |
-| SIT | System integration |
-| QA  | Quality assurance |
-| UAT | User acceptance |
+| Env | Purpose | Auth path |
+|-----|---------|-----------|
+| DEV | Primary authoring / debug (default) | `auth/dev/*.json` or legacy `auth/*.json` |
+| SIT | System integration | `auth/sit/*.json` |
+| QA  | Quality assurance | `auth/qa/*.json` |
+| UAT | User acceptance | `auth/uat/*.json` |
 
 Each env has its own app URL, Dataverse URL, and auth session (`auth/` is gitignored).
+Seed partners/projects/contracts are created per env and discovered via Dataverse OData —
+never hardcode DEV entity names/GUIDs.
 
 ## Automation scope
 
@@ -41,3 +43,4 @@ Each env has its own app URL, Dataverse URL, and auth session (`auth/` is gitign
 - Dataverse API validation (UI counts vs backend)
 - Role-based testing (PM vs BDU/Admin) — see `30-roles-and-security`
 - Screen/flow behavior — see `50-app-functionality`
+- Multi-env execution via `ENV` — see `config/env.ts` and `phase2.md`
