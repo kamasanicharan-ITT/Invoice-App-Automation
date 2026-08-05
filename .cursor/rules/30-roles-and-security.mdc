@@ -23,20 +23,23 @@ Admin is **not** a Power Apps environment role. It is a row in the Dataverse
 
 - Elevates the user: All Invoices, full Dashboard counts, Adhoc Invoice toggle,
   approve / review / flag / send.
-- In practice **only BDUs are added** as admin (a Basic User *could* be elevated the
-  same way, but that is not how the org assigns it).
-- Current test account (Kamasani Charan) is **BDU + admin**.
+- In practice **only BDUs are added** as admin.
 
-## Personas for tests
+## Personas for tests (fixed accounts)
 
-| Persona | Power Apps role | Security Roles table | storageState | Expected access |
-|---------|-----------------|----------------------|--------------|-----------------|
-| PM | Basic User 2.0 | Not present | `auth/pm.json` | Own invoices only; no All Invoices; no adhoc; no approve/review |
-| BDU/Admin | BDU | `admin` | `auth/bdu.json` or `auth/admin.json` | All invoices; adhoc unlimited; review/approve/flag/send; full Dashboard |
+| Persona | Who | Power Apps role | Security Roles | storageState (per env) | Access |
+|---------|-----|-----------------|----------------|------------------------|--------|
+| **Admin** | **You** (Kamasani Charan) | BDU | `admin` row | `auth/<env>/admin.json` | All invoices; adhoc; review/approve/flag/send; full Dashboard |
+| **PM** | **Teammate** | Basic User 2.0 | Not present | `auth/<env>/pm.json` | Own invoices only; no All Invoices; no adhoc; no approve/review |
 
 Treat **BDU and Admin as the same elevated persona** in practice (BDU + admin row).
+Do not maintain a separate `bdu.json` unless a third account is introduced later.
+
+Same two people are used in DEV / SIT / QA / UAT — capture a fresh `storageState` per env
+because cookies/tokens are org-specific.
 
 ## Role-based testing guidance
 
 - State persona + expected outcome (allow / deny / visible / hidden) on every scenario.
-- Run the same flow under different `storageState` files — see `capture-role-auth`.
+- Run under `chromium-admin` or `chromium-pm` — see `capture-role-auth`.
+- Seed data differs per Dataverse; fixtures must query the active env.

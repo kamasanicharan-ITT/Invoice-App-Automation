@@ -1,59 +1,58 @@
 ---
 name: capture-role-auth
-description: Produce a signed-in Playwright storageState per persona (PM / BDU / Admin) for role-based Invoice app testing. Use when the user needs to capture, refresh, or set up auth states for a role, or mentions auth/pm.json, auth/bdu.json, auth/admin.json, or role-based storageState.
+description: Produce a signed-in Playwright storageState per persona (Admin / PM) for role-based Invoice app testing across ENV=dev|sit|qa|uat. Use when the user needs to capture, refresh, or set up auth states for a role, or mentions auth/pm.json, auth/admin.json, or role-based storageState.
 ---
 
 # Capture Role Auth States
 
 Role-based tests run the same scenario under different personas by pointing Playwright at a
-different `storageState`. This skill captures one signed-in session per persona.
+different `storageState`. This skill captures one signed-in session per persona **per environment**.
 
-See `.cursor/rules/30-roles-and-security` for the persona/role mapping.
+See `.cursor/rules/30-roles-and-security` and `config/env.ts`.
 
 ## Personas and files
 
-| Persona | Security role                       | storageState    |
-|---------|-------------------------------------|-----------------|
-| PM      | Invoice application basic user 2.0  | `auth/pm.json`  |
-| BDU     | BDU                                 | `auth/bdu.json` |
-| Admin   | BDU + `admin` in security table     | `auth/admin.json` |
+| Persona | Who | storageState |
+|---------|-----|--------------|
+| Admin | You (BDU + Security Roles admin) | `auth/<env>/admin.json` |
+| PM | Teammate (Basic User 2.0) | `auth/<env>/pm.json` |
 
-`auth/` is git-ignored. Never commit these files.
+`<env>` is `dev`, `sit`, `qa`, or `uat`. `auth/` is git-ignored. Never commit these files.
 
-## Capture procedure (per persona)
+DEV also accepts legacy flat files `auth/admin.json` / `auth/pm.json` if the nested
+path is missing.
 
-1. Ensure the `auth/` directory exists.
-2. Launch a headed browser and open the app URL (from `.cursor/rules/00-project-overview`):
+## Capture procedure (per persona, per env)
 
-   ```bash
-   npx playwright open --save-storage=auth/pm.json "https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a"
+1. Ensure the folder exists, e.g. `mkdir auth\sit`.
+2. Resolve the app URL for that env from `config/env.ts` (or `APP_URL` override).
+3. Launch headed Playwright and save storage:
+
+   ```powershell
+   npx playwright open --save-storage=auth/sit/admin.json "<SIT_APP_URL>"
+   npx playwright open --save-storage=auth/sit/pm.json "<SIT_APP_URL>"
    ```
 
-3. Sign in interactively as the target persona's account and wait until the Dashboard loads
+4. Sign in as **you** for Admin, or as **teammate** for PM. Wait until Dashboard loads
    inside `iframe[name="fullscreen-app-host"]`.
-4. Close the browser — Playwright writes the session to the `--save-storage` path.
-5. Repeat with `auth/bdu.json` and `auth/admin.json` for the other personas.
+5. Close the browser — Playwright writes the session file.
+6. Repeat for each environment you need to test.
 
-## Wiring into Playwright
+## Wiring
 
-Expose one project per persona in `playwright.config.ts`, each with its own `storageState`:
+`playwright.config.ts` reads `config/env.ts` and sets:
 
-```ts
-projects: [
-  { name: 'chromium-pm',    use: { ...devices['Desktop Chrome'], storageState: 'auth/pm.json' } },
-  { name: 'chromium-bdu',   use: { ...devices['Desktop Chrome'], storageState: 'auth/bdu.json' } },
-  { name: 'chromium-admin', use: { ...devices['Desktop Chrome'], storageState: 'auth/admin.json' } },
-],
+- `chromium` / `chromium-admin` → `env.authAdmin`
+- `chromium-pm` → `env.authPm`
+
+```powershell
+npx playwright test --project=chromium-admin
+$env:ENV="sit"; npx playwright test --project=chromium-pm
 ```
 
-Run a persona with `npx playwright test --project=chromium-pm`. Tests never contain login
-code; the storageState handles the session.
+Tests never contain login code.
 
 ## Persona tagging in scenarios
 
-When planning or generating, tag each role-based scenario with the persona(s) and the
-expected outcome (allow / deny / visible / hidden). Example:
-
-- `[PM] deny` — PM cannot see the Approve action on another PM's invoice.
-- `[BDU] allow` — BDU can review and approve any invoice.
-- `[Admin] visible` — Admin sees admin-only configuration entries.
+- `[Admin] allow/visible` — your elevated account
+- `[PM] deny/hidden` — teammate basic account (e.g. Adhoc hidden)

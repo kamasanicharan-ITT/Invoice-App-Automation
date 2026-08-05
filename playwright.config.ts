@@ -1,18 +1,21 @@
 import { defineConfig, devices } from '@playwright/test';
+import { env } from './config/env';
 
 /**
- * Role-based storageState (gitignored under auth/):
- * - auth/admin.json — BDU + app admin (org-wide Dashboard counts)
- * - auth/pm.json    — Invoice application basic user 2.0 (user-scoped counts)
+ * Multi-env + role-based storageState (gitignored under auth/):
+ *   ENV=dev|sit|qa|uat (default dev; prod forbidden — see config/env.ts)
+ *   admin — your account (BDU + Security Roles admin) → auth/<env>/admin.json
+ *   pm    — teammate (Basic User 2.0)                → auth/<env>/pm.json
+ *   DEV also accepts legacy auth/admin.json + auth/pm.json
  *
- * Capture:
- *   npx playwright open --save-storage=auth/admin.json "<APP_URL>"
- *   npx playwright open --save-storage=auth/pm.json "<APP_URL>"
+ * Capture (example SIT):
+ *   mkdir auth\sit
+ *   npx playwright open --save-storage=auth/sit/admin.json "<SIT_APP_URL>"
+ *   npx playwright open --save-storage=auth/sit/pm.json "<SIT_APP_URL>"
  *
  * Run:
- *   npx playwright test tests/dashboard.spec.ts --project=chromium-admin
- *   npx playwright test tests/dashboard.spec.ts --project=chromium-pm
- *   npx playwright test tests/dashboard.spec.ts --project=chromium-admin --project=chromium-pm
+ *   npx playwright test --project=chromium-admin
+ *   $env:ENV="sit"; npx playwright test --project=chromium-admin
  */
 export default defineConfig({
   testDir: './tests',
@@ -20,9 +23,18 @@ export default defineConfig({
   retries: 1,
   fullyParallel: false,
 
+  // Exploration / discovery specs — run explicitly if needed, not in default regression.
+  testIgnore: [
+    '**/dataverse-explorer.spec.ts',
+    '**/dataverse-schema.spec.ts',
+    '**/dataverse-schema-export.spec.ts',
+    '**/flow-tracking.spec.ts',
+  ],
+
   reporter: [['list'], ['html', { open: 'never' }]],
 
   use: {
+    baseURL: env.appUrl,
     headless: false,
     screenshot: 'on',
     video: 'retain-on-failure',
@@ -30,18 +42,18 @@ export default defineConfig({
   },
 
   projects: [
-    // Default alias → admin (keeps bare `npx playwright test` / MCP chromium runs working)
+    // Default alias → admin (bare `npx playwright test` / MCP chromium)
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'], storageState: 'auth/admin.json' },
+      use: { ...devices['Desktop Chrome'], storageState: env.authAdmin },
     },
     {
       name: 'chromium-admin',
-      use: { ...devices['Desktop Chrome'], storageState: 'auth/admin.json' },
+      use: { ...devices['Desktop Chrome'], storageState: env.authAdmin },
     },
     {
       name: 'chromium-pm',
-      use: { ...devices['Desktop Chrome'], storageState: 'auth/pm.json' },
+      use: { ...devices['Desktop Chrome'], storageState: env.authPm },
     },
   ],
 });

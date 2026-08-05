@@ -2,13 +2,10 @@
 // seed: tests/seed.spec.ts
 
 import { test, expect, request, type Page, type FrameLocator, type Request, type TestInfo } from '@playwright/test';
+import { APP_URL, DATAVERSE_URL } from '../config/env';
 import { markAndShot, markGroupAndShot, shot } from './utils/screenshot';
 import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
 
-
-const APP_URL =
-  'https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a';
-const DATAVERSE_URL = 'https://dev-itt-apps.crm8.dynamics.com';
 const INVOICE_TABLE = 'dia_invoicedetailses';
 const MAIL_LIST_TABLE = 'dia_invoicemaillists';
 

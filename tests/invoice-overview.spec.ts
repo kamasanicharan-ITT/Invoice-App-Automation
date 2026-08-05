@@ -1,17 +1,15 @@
 // spec: specs/invoice-overview-test-plan.md
 // seed: tests/seed.spec.ts
 //
-// Invoice Overview suite — Admin (auth/admin.json) vs PM (auth/pm.json).
+// Invoice Overview suite — Admin (you) vs PM (teammate).
 // Same shell for both; My Invoices / All Invoices radios are Admin-only.
 // Persona is inferred from Playwright project name (same pattern as dashboard.spec.ts).
+// URLs/auth come from config/env.ts (ENV=dev|sit|qa|uat).
 
 import { test, expect, type Page, type FrameLocator, type TestInfo } from '@playwright/test';
+import { APP_URL } from '../config/env';
 import { markGroupAndShot } from './utils/screenshot';
 import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
-
-
-const APP_URL =
-  'https://apps.powerapps.com/play/e/5ae6e1b2-1834-e538-87c8-7bea27dfc2db/a/f6aa60b5-4c74-48f6-87af-9623b4417105?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a';
 
 const PERIOD_OPTIONS = [
   'This Month',
