@@ -48,8 +48,10 @@ const ENV_DEFAULTS: Record<
     tenantId: TENANT_ID_DEFAULT,
   },
   qa: {
-    appUrl: '',
-    dataverseUrl: '',
+    // Stable play URL (omit hint/sourcetime — those are session-specific).
+    appUrl:
+      'https://apps.powerapps.com/play/e/b04a3c58-54a5-e41e-a56e-ffe7f8b4f2d3/a/ba2aa750-0a8d-404a-bca1-24b4758a1895?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a',
+    dataverseUrl: 'https://qa-itt-apps.crm8.dynamics.com',
     tenantId: TENANT_ID_DEFAULT,
   },
   uat: {
