@@ -3,7 +3,7 @@
  * Discovers partners/projects/contracts in the active ENV's Dataverse — no hardcoded seed names.
  */
 import { request, type Browser, type Request } from '@playwright/test';
-import { APP_URL, DATAVERSE_URL } from '../../config/env';
+import { APP_URL, DATAVERSE_URL, env } from '../../config/env';
 
 export { APP_URL, DATAVERSE_URL };
 
@@ -18,6 +18,7 @@ export type ProjectFixture = {
   projectName: string;
   projectId: string;
   contractId?: string;
+  contractName?: string;
   region?: string;
 };
 
@@ -93,8 +94,16 @@ export async function captureDataverseToken(
   appUrl: string = APP_URL
 ): Promise<string> {
   const { expect } = await import('@playwright/test');
+  // Prefer env authAdmin (auth/<env>/admin.json); fall back to legacy auth.json / auth/admin.json
+  const fs = await import('node:fs');
+  const authCandidates = [env.authAdmin, 'auth/admin.json', 'auth.json'];
+  const storageState = authCandidates.find((p) => fs.existsSync(p));
+  if (!storageState) {
+    console.log('No admin storageState found for token capture:', authCandidates.join(', '));
+    return '';
+  }
   // Explicit storageState — browser.newPage() alone does not inherit config use.storageState
-  const context = await browser.newContext({ storageState: 'auth.json' });
+  const context = await browser.newContext({ storageState });
   const page = await context.newPage();
   let token = '';
 
@@ -206,6 +215,7 @@ async function resolveProjectRegion(
 
 type ContractRow = {
   ittdev_contractid?: string;
+  ittdev_name?: string;
   _ittdev_dia_project_value?: string;
   ittdev_dia_Project?: {
     dia_projectid?: string;
@@ -238,6 +248,67 @@ async function fetchActiveContractsCoveringDate(
     return [];
   }
   return (await res.json()).value ?? [];
+}
+
+export type ContractOption = {
+  contractId: string;
+  name: string;
+  start?: string;
+  end?: string;
+  /** Contract period covers the invoice date the form defaults to. */
+  coversInvoiceDate: boolean;
+};
+
+/**
+ * Every Active contract on a project, newest first, flagged for whether it covers the
+ * invoice date. Lets a test know up front whether the Canvas "Please select the Contract."
+ * modal is expected, and which contract is the right one to pick.
+ */
+export async function listActiveContractsForProject(
+  token: string,
+  projectId: string,
+  invoiceDateYmd?: string
+): Promise<ContractOption[]> {
+  const invoiceDate = invoiceDateYmd ?? getBillingCycleDates().end.slice(0, 10);
+  const api = await request.newContext();
+  try {
+    const filter = encodeURIComponent(
+      `statecode eq 0 and _ittdev_dia_project_value eq ${projectId}`
+    );
+    const res = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/ittdev_contracts?$filter=${filter}` +
+        `&$select=ittdev_contractid,ittdev_name,ittdev_startdate,ittdev_enddate` +
+        `&$orderby=ittdev_startdate desc&$top=50`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!res.ok()) {
+      console.log(
+        'Project contract query failed:',
+        res.status(),
+        (await res.text()).slice(0, 200)
+      );
+      return [];
+    }
+    const rows = ((await res.json()).value ?? []) as {
+      ittdev_contractid?: string;
+      ittdev_name?: string;
+      ittdev_startdate?: string;
+      ittdev_enddate?: string;
+    }[];
+    return rows.map((r) => ({
+      contractId: r.ittdev_contractid ?? '',
+      name: (r.ittdev_name ?? '').trim(),
+      start: r.ittdev_startdate,
+      end: r.ittdev_enddate,
+      coversInvoiceDate:
+        !!r.ittdev_startdate &&
+        !!r.ittdev_enddate &&
+        r.ittdev_startdate.slice(0, 10) <= invoiceDate &&
+        r.ittdev_enddate.slice(0, 10) >= invoiceDate,
+    }));
+  } finally {
+    await api.dispose();
+  }
 }
 
 function groupContractsByProject(contracts: ContractRow[]): Map<string, ContractRow[]> {
@@ -301,6 +372,7 @@ async function toProjectFixture(
     projectName: project!.dia_projectname as string,
     projectId,
     contractId: list[0].ittdev_contractid,
+    contractName: list[0].ittdev_name,
     region,
   };
 }
@@ -420,6 +492,51 @@ export async function findProjectByRegion(
     if (fixture) return fixture;
   }
   return null;
+}
+
+/**
+ * Active projects whose contract covers this-cycle invoice date and whose
+ * Region matches `regionLabel`. Shuffled so tests do not reuse the same
+ * partner/project every run.
+ */
+export async function listProjectsWithActiveContractsByRegion(
+  token: string,
+  regionLabel: string,
+  opts: { limit?: number } = {}
+): Promise<ProjectFixture[]> {
+  const limit = opts.limit ?? 12;
+  const { end } = getBillingCycleDates();
+  const invoiceDate = end.slice(0, 10);
+  const contracts = await fetchActiveContractsCoveringDate(token, invoiceDate, 200);
+  const byProject = groupContractsByProject(contracts);
+  const needle = regionLabel.toLowerCase();
+  const found: ProjectFixture[] = [];
+
+  for (const [projectId, list] of byProject) {
+    if (list.length < 1) continue;
+    const project = list[0].ittdev_dia_Project;
+    if (!isActiveProject(project)) continue;
+    const formatted =
+      project!['david.zara@example.net.V1.FormattedValue'] ??
+      (await resolveProjectRegion(token, projectId)) ??
+      '';
+    if (!formatted.toLowerCase().includes(needle)) continue;
+    const fixture = await toProjectFixture(token, projectId, list);
+    if (fixture) found.push(fixture);
+    if (found.length >= Math.max(limit * 2, 16)) break;
+  }
+
+  for (let i = found.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [found[i], found[j]] = [found[j], found[i]];
+  }
+
+  const picked = found.slice(0, limit);
+  console.log(
+    `Active-contract ${regionLabel} projects (${found.length} found, using ${picked.length}):`,
+    picked.map((p) => `${p.partnerName} / ${p.projectName}`).join('; ') || 'NONE'
+  );
+  return picked;
 }
 
 export async function findProduct(
