@@ -920,8 +920,13 @@ test.describe('Power Automate flow tracking', () => {
     eligibleNonAdhoc: null,
     duplicateNonAdhoc: null,
     noLastMonthInvoice: null,
+    withLastInvoice: null,
     northAmerica: null,
     nonNorthAmerica: null,
+    noActiveContract: null,
+    noFourthMonthCoverage: null,
+    multiActiveContract: null,
+    cursorTest: null,
     editableProduct: null,
     nonEditableProduct: null,
   };

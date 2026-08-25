@@ -35,8 +35,21 @@ export type CreateInvoiceFixtures = {
   /** Active project that already has a non-adhoc invoice in the duplicate window. */
   duplicateNonAdhoc: ProjectFixture | null;
   noLastMonthInvoice: ProjectFixture | null;
+  /** Selectable project whose previous invoice has line items — source for "Start with last invoice". */
+  withLastInvoice: ProjectFixture | null;
   northAmerica: ProjectFixture | null;
   nonNorthAmerica: ProjectFixture | null;
+  /** Active project with zero Active contracts — CI-008 toast. */
+  noActiveContract: ProjectFixture | null;
+  /**
+   * Active project whose covering contract ends before the 3-month cap
+   * (first blocked day). Used for non-adhoc past-cap + no coverage (CI-052).
+   */
+  noFourthMonthCoverage: ProjectFixture | null;
+  /** Project with 2+ Active contracts covering the default invoice date (CI-014). */
+  multiActiveContract: ProjectFixture | null;
+  /** Unimind / Cursor Test when present — preferred seed for multi-contract checks. */
+  cursorTest: ProjectFixture | null;
   editableProduct: ProductFixture | null;
   nonEditableProduct: ProductFixture | null;
 };
@@ -216,6 +229,8 @@ async function resolveProjectRegion(
 type ContractRow = {
   ittdev_contractid?: string;
   ittdev_name?: string;
+  ittdev_startdate?: string;
+  ittdev_enddate?: string;
   _ittdev_dia_project_value?: string;
   ittdev_dia_Project?: {
     dia_projectid?: string;
@@ -306,6 +321,165 @@ export async function listActiveContractsForProject(
         r.ittdev_startdate.slice(0, 10) <= invoiceDate &&
         r.ittdev_enddate.slice(0, 10) >= invoiceDate,
     }));
+  } finally {
+    await api.dispose();
+  }
+}
+
+export type ContractListRow = {
+  contractId: string;
+  name: string;
+  start?: string;
+  end?: string;
+  /** 0 = Active, 1 = Inactive. */
+  statecode: number;
+};
+
+function localYmd(year: number, monthIndex: number, day: number): string {
+  const mm = String(monthIndex + 1).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  return `${year}-${mm}-${dd}`;
+}
+
+/** First day of calendar month + 3 as YYYY-MM-DD (August → 2026-11-01). */
+export function firstBlockedCapYmd(reference = new Date()): string {
+  const d = new Date(reference.getFullYear(), reference.getMonth() + 3, 1);
+  return localYmd(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** First day of calendar month + 4 as YYYY-MM-DD (August → 2026-12-01). */
+export function fourthMonthStartYmd(reference = new Date()): string {
+  const d = new Date(reference.getFullYear(), reference.getMonth() + 4, 1);
+  return localYmd(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Every contract on a project (Active and Inactive), newest start first. */
+export async function listContractsForProject(
+  token: string,
+  projectId: string
+): Promise<ContractListRow[]> {
+  const api = await request.newContext();
+  try {
+    const filter = encodeURIComponent(`_ittdev_dia_project_value eq ${projectId}`);
+    const res = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/ittdev_contracts?$filter=${filter}` +
+        `&$select=ittdev_contractid,ittdev_name,ittdev_startdate,ittdev_enddate,statecode` +
+        `&$orderby=ittdev_startdate desc&$top=50`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!res.ok()) {
+      console.log(
+        'All-contracts query failed:',
+        res.status(),
+        (await res.text()).slice(0, 200)
+      );
+      return [];
+    }
+    const rows = ((await res.json()).value ?? []) as {
+      ittdev_contractid?: string;
+      ittdev_name?: string;
+      ittdev_startdate?: string;
+      ittdev_enddate?: string;
+      statecode?: number;
+    }[];
+    return rows.map((r) => ({
+      contractId: r.ittdev_contractid ?? '',
+      name: (r.ittdev_name ?? '').trim(),
+      start: r.ittdev_startdate,
+      end: r.ittdev_enddate,
+      statecode: r.statecode ?? 0,
+    }));
+  } finally {
+    await api.dispose();
+  }
+}
+
+export async function findProjectByName(
+  token: string,
+  projectName: string
+): Promise<ProjectFixture | null> {
+  const api = await request.newContext();
+  try {
+    const filter = encodeURIComponent(`dia_projectname eq '${projectName.replace(/'/g, "''")}'`);
+    const res = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_projects?$filter=${filter}` +
+        `&$select=dia_projectid,dia_projectname,_ittdev_account_value&$top=5`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!res.ok()) {
+      console.log('findProjectByName failed:', res.status(), (await res.text()).slice(0, 200));
+      return null;
+    }
+    const row = ((await res.json()).value ?? [])[0] as {
+      dia_projectid?: string;
+      dia_projectname?: string;
+      _ittdev_account_value?: string;
+    } | undefined;
+    if (!row?.dia_projectid) return null;
+    const partnerName = await resolveAccountName(token, row._ittdev_account_value);
+    if (!partnerName) return null;
+    return {
+      partnerName,
+      projectName: (row.dia_projectname ?? projectName).trim(),
+      projectId: row.dia_projectid,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** Active project that has zero Active contracts (may still have Inactive rows). */
+export async function findProjectWithNoActiveContract(
+  token: string
+): Promise<ProjectFixture | null> {
+  const api = await request.newContext();
+  try {
+    const contractRes = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/ittdev_contracts?$filter=statecode eq 0` +
+        `&$select=_ittdev_dia_project_value&$top=500`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    const withActive = new Set<string>();
+    if (contractRes.ok()) {
+      for (const r of ((await contractRes.json()).value ?? []) as {
+        _ittdev_dia_project_value?: string;
+      }[]) {
+        if (r._ittdev_dia_project_value) withActive.add(r._ittdev_dia_project_value);
+      }
+    }
+
+    const projectRes = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_projects?$select=dia_projectid,dia_projectname,_ittdev_account_value,dia_projectstatus` +
+        `&$top=200`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!projectRes.ok()) {
+      console.log(
+        'No-active-contract project query failed:',
+        projectRes.status(),
+        (await projectRes.text()).slice(0, 200)
+      );
+      return null;
+    }
+    const rows = ((await projectRes.json()).value ?? []) as {
+      dia_projectid?: string;
+      dia_projectname?: string;
+      _ittdev_account_value?: string;
+      dia_projectstatus?: string;
+    }[];
+    for (const row of rows) {
+      if (!row.dia_projectid || !row.dia_projectname) continue;
+      if (row.dia_projectstatus && String(row.dia_projectstatus) !== 'Active') continue;
+      if (withActive.has(row.dia_projectid)) continue;
+      const partnerName = await resolveAccountName(token, row._ittdev_account_value);
+      if (!partnerName) continue;
+      return {
+        partnerName,
+        projectName: row.dia_projectname.trim(),
+        projectId: row.dia_projectid,
+      };
+    }
+    return null;
   } finally {
     await api.dispose();
   }
@@ -539,6 +713,69 @@ export async function listProjectsWithActiveContractsByRegion(
   return picked;
 }
 
+export type InvoiceLineItem = {
+  description: string;
+  quantity: number;
+  rate: number;
+};
+
+export type LastInvoiceSnapshot = {
+  invoiceId: string;
+  invoiceDate?: string;
+  lines: InvoiceLineItem[];
+};
+
+/**
+ * Most recent non-Cancelled invoice dated before the current calendar month, with its
+ * Billing Info rows — the record "Start with last invoice" copies line items from.
+ */
+export async function fetchLastInvoiceWithLines(
+  token: string,
+  projectId: string
+): Promise<LastInvoiceSnapshot | null> {
+  const monthStart = getCalendarMonthDates().start;
+  const api = await request.newContext();
+  try {
+    const filter = encodeURIComponent(
+      `_dia_projectid_value eq ${projectId} and dia_invoicedate lt ${monthStart} ` +
+        `and dia_status ne 'Cancelled'`
+    );
+    const res = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_invoicedetailses?$filter=${filter}` +
+        `&$select=dia_invoicedetailsid,dia_invoicedate&$orderby=dia_invoicedate desc&$top=1`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!res.ok()) {
+      console.log('Last invoice query failed:', res.status(), (await res.text()).slice(0, 200));
+      return null;
+    }
+    const row = ((await res.json()).value ?? [])[0];
+    if (!row) return null;
+    const invoiceId = row.dia_invoicedetailsid as string;
+
+    const lineRes = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_invoicelineitemdetailses` +
+        `?$filter=${encodeURIComponent(`_dia_invoiceid_value eq ${invoiceId}`)}` +
+        `&$select=dia_itemdescription,dia_description,dia_quantity,dia_rate,dia_total&$top=50`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!lineRes.ok()) {
+      console.log('Line item query failed:', lineRes.status(), (await lineRes.text()).slice(0, 200));
+      return { invoiceId, invoiceDate: row.dia_invoicedate, lines: [] };
+    }
+    const lines: InvoiceLineItem[] = ((await lineRes.json()).value ?? []).map(
+      (l: Record<string, unknown>) => ({
+        description: String(l.dia_itemdescription ?? l.dia_description ?? '').trim(),
+        quantity: Number(l.dia_quantity ?? 0),
+        rate: Number(l.dia_rate ?? 0),
+      })
+    );
+    return { invoiceId, invoiceDate: row.dia_invoicedate, lines };
+  } finally {
+    await api.dispose();
+  }
+}
+
 export async function findProduct(
   token: string,
   rateType: 'Editable Rate' | 'Non-Editable Rate'
@@ -622,8 +859,12 @@ export async function loadCreateInvoiceFixtures(
   let eligibleNonAdhoc: ProjectFixture | null = null;
   let duplicateNonAdhoc: ProjectFixture | null = null;
   let noLastMonthInvoice: ProjectFixture | null = null;
+  let withLastInvoice: ProjectFixture | null = null;
   let northAmerica: ProjectFixture | null = null;
   let nonNorthAmerica: ProjectFixture | null = null;
+  let noFourthMonthCoverage: ProjectFixture | null = null;
+  let multiActiveContract: ProjectFixture | null = null;
+  const firstBlockedYmd = firstBlockedCapYmd();
 
   const now = new Date();
   const calPrevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
@@ -678,6 +919,18 @@ export async function loadCreateInvoiceFixtures(
       }
     }
 
+    if (list.length >= 2 && !multiActiveContract) {
+      const covering = list.filter((c) => {
+        const start = c.ittdev_startdate?.slice(0, 10);
+        const end = c.ittdev_enddate?.slice(0, 10);
+        return !!start && !!end && start <= invoiceDate && end >= invoiceDate;
+      });
+      if (covering.length >= 2) {
+        const picked = await toProjectFixture(token, projectId, covering);
+        if (picked) multiActiveContract = picked;
+      }
+    }
+
     if (list.length === 1) {
       const hasBlocking = await projectHasInvoiceInWindow(
         token,
@@ -692,16 +945,52 @@ export async function loadCreateInvoiceFixtures(
       if (hasBlocking && !duplicateNonAdhoc) {
         duplicateNonAdhoc = await toProjectFixture(token, projectId, list);
       }
+      const end = list[0].ittdev_enddate?.slice(0, 10);
+      if (end && end < firstBlockedYmd) {
+        const short = await toProjectFixture(token, projectId, list);
+        if (short && (!noFourthMonthCoverage || !hasBlocking)) {
+          noFourthMonthCoverage = short;
+        }
+      }
+      // Prefill source must be selectable without the Duplicate Project! popup,
+      // and its previous invoice must actually carry line items to copy.
+      if (!hasBlocking && !withLastInvoice) {
+        const snapshot = await fetchLastInvoiceWithLines(token, projectId);
+        if (snapshot && snapshot.lines.length > 0) {
+          withLastInvoice = await toProjectFixture(token, projectId, list);
+        }
+      }
     }
 
     if (
       eligibleNonAdhoc &&
       duplicateNonAdhoc &&
       noLastMonthInvoice &&
+      withLastInvoice &&
       northAmerica &&
-      nonNorthAmerica
+      nonNorthAmerica &&
+      noFourthMonthCoverage &&
+      multiActiveContract
     ) {
       break;
+    }
+  }
+
+  const [noActiveContract, cursorTest] = await Promise.all([
+    findProjectWithNoActiveContract(token),
+    findProjectByName(token, 'Cursor Test'),
+  ]);
+
+  if (cursorTest) {
+    const covering = (await listActiveContractsForProject(token, cursorTest.projectId)).filter(
+      (c) => c.coversInvoiceDate
+    );
+    if (covering.length >= 2) {
+      multiActiveContract = {
+        ...cursorTest,
+        contractId: covering[0].contractId,
+        contractName: covering[0].name,
+      };
     }
   }
 
@@ -709,8 +998,13 @@ export async function loadCreateInvoiceFixtures(
     eligibleNonAdhoc,
     duplicateNonAdhoc,
     noLastMonthInvoice,
+    withLastInvoice,
     northAmerica,
     nonNorthAmerica,
+    noActiveContract,
+    noFourthMonthCoverage,
+    multiActiveContract,
+    cursorTest,
     editableProduct,
     nonEditableProduct,
   };
@@ -723,8 +1017,13 @@ export function logFixtures(fixtures: CreateInvoiceFixtures): void {
   console.log('  eligibleNonAdhoc (no duplicate):', fmt(fixtures.eligibleNonAdhoc));
   console.log('  duplicateNonAdhoc:', fmt(fixtures.duplicateNonAdhoc));
   console.log('  noLastMonthInvoice:', fmt(fixtures.noLastMonthInvoice));
+  console.log('  withLastInvoice (prefill source):', fmt(fixtures.withLastInvoice));
   console.log('  northAmerica:', fmt(fixtures.northAmerica));
   console.log('  nonNorthAmerica:', fmt(fixtures.nonNorthAmerica));
+  console.log('  noActiveContract:', fmt(fixtures.noActiveContract));
+  console.log('  noFourthMonthCoverage:', fmt(fixtures.noFourthMonthCoverage));
+  console.log('  multiActiveContract:', fmt(fixtures.multiActiveContract));
+  console.log('  cursorTest:', fmt(fixtures.cursorTest));
   console.log('  editableProduct:', fixtures.editableProduct?.name ?? 'NONE');
   console.log('  nonEditableProduct:', fixtures.nonEditableProduct?.name ?? 'NONE');
 }
