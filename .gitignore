@@ -9,3 +9,11 @@ node_modules/
 auth.json
 auth/
 .playwright-mcp/
+
+# Local probe / run logs (do not commit)
+baseline-*.txt
+probe-*.txt
+probe-*.png
+run-group*.txt
+run-group*.json
+
