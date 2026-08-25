@@ -179,10 +179,10 @@ export async function markGroupAndShot(
   }
 
   // Bring the group into view: scroll the first and last anchors.
-  await elements[0].scrollIntoViewIfNeeded();
+  await elements[0].scrollIntoViewIfNeeded().catch(() => undefined);
   if (elements.length > 1) {
-    await elements[elements.length - 1].scrollIntoViewIfNeeded();
-    await elements[0].scrollIntoViewIfNeeded();
+    await elements[elements.length - 1].scrollIntoViewIfNeeded().catch(() => undefined);
+    await elements[0].scrollIntoViewIfNeeded().catch(() => undefined);
   }
 
   const rects = await Promise.all(elements.map((el) => rectOf(el)));
