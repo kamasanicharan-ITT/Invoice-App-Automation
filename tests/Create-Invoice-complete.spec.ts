@@ -52,6 +52,11 @@ import {
   partnerComboHasOptions,
   fillValidLine,
 } from './utils/create-invoice-ui';
+import {
+  assertSubmitFlowEvidence,
+  beginFlowCapture,
+  captureSubmitFlowEvidence,
+} from './utils/invoice-submit-flows';
 
 test.describe('Create Invoice regression', () => {
   test.describe.configure({ timeout: 120000 });
@@ -90,6 +95,21 @@ test.describe('Create Invoice regression', () => {
     const contracts = await listActiveContractsForProject(dataverseToken, projectId);
     const covering = contracts.find((c) => c.coversInvoiceDate) ?? contracts[0];
     return covering?.end ? addDaysUs(covering.end, 1) : null;
+  }
+
+  function fixtureByProjectName(name: string) {
+    const list = [
+      fixtures.eligibleNonAdhoc,
+      fixtures.northAmerica,
+      fixtures.nonNorthAmerica,
+      fixtures.cursorTest,
+      fixtures.duplicateNonAdhoc,
+      fixtures.noLastMonthInvoice,
+      fixtures.withLastInvoice,
+      fixtures.multiActiveContract,
+      fixtures.noActiveContract,
+    ];
+    return list.find((p) => p?.projectName === name) ?? null;
   }
 
   // ── 1. Page load and defaults ─────────────────────────────────────────────
@@ -1383,6 +1403,8 @@ test.describe('Create Invoice regression', () => {
   });
 
   // ── 9. Duplicate Submit Save Draft Close ──────────────────────────────────
+  // CI-075 Submit tracks Create Invoice NA/Other (+ reports Update NA/Other).
+  // Save Draft / Close / enable-only cases do not start those parent flows.
 
   test.describe('Duplicate Submit Save Draft Close', () => {
     test('CI-046 CI-047 Duplicate Project popup for same project same month', async ({
@@ -1425,7 +1447,7 @@ test.describe('Create Invoice regression', () => {
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Fill partner, project with covering contract, complete line item, dates in range.
+      // Button-enable only — no Submit click, so Create/Update region flows are not expected.
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       const outcome = await selectPartnerAndProject(appFrame, eligible!);
       test.skip(outcome === 'duplicate', 'Eligible project showed Duplicate Project!');
@@ -1458,7 +1480,7 @@ test.describe('Create Invoice regression', () => {
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Fill required fields, click Save Draft.
+      // Fill required fields, click Save Draft. Product rule: Draft write, no Create/Update flow.
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       const outcome = await selectPartnerAndProject(appFrame, eligible!);
       test.skip(outcome === 'duplicate', 'Eligible project showed Duplicate Project!');
@@ -1563,6 +1585,7 @@ test.describe('Create Invoice regression', () => {
     test('CI-075 Overview gallery shows submitted invoice after Submit', async ({
       page,
     }, testInfo) => {
+      test.setTimeout(600000);
       const eligible = fixtures.eligibleNonAdhoc;
       test.skip(!eligible, 'No eligible project');
       test.skip(!fixtures.editableProduct, 'No editable product');
@@ -1570,7 +1593,7 @@ test.describe('Create Invoice regression', () => {
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Submit a valid invoice.
+      // Submit a valid invoice. Region of this project picks Create Invoice - NA vs Other.
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       const outcome = await selectPartnerAndProject(appFrame, eligible!);
       test.skip(outcome === 'duplicate', 'Eligible project showed Duplicate Project!');
@@ -1578,6 +1601,8 @@ test.describe('Create Invoice regression', () => {
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 20000,
       });
+      const session = beginFlowCapture(page, dataverseToken);
+      const submitStartedAt = new Date().toISOString();
       await appFrame.getByRole('button', { name: 'Submit' }).click();
       await awaitSubmitNavigatedToOverview(appFrame);
       await expect(appFrame.getByText(/Submitted|Pending/i).first()).toBeVisible({
@@ -1595,6 +1620,22 @@ test.describe('Create Invoice regression', () => {
           testInfo
         );
       });
+
+      await page.close().catch(() => undefined);
+      const evidence = await captureSubmitFlowEvidence({
+        token: dataverseToken,
+        testInfo,
+        session,
+        action: 'Submit',
+        project: {
+          partnerName: eligible!.partnerName,
+          projectName: eligible!.projectName,
+          region: eligible!.region,
+          projectId: eligible!.projectId,
+        },
+        submitStartedAt,
+      });
+      assertSubmitFlowEvidence(evidence);
     });
   });
 
@@ -1625,7 +1666,7 @@ test.describe('Create Invoice regression', () => {
         'No Edit action on Overview (empty gallery or no Draft/Flagged)'
       );
 
-      // From Overview, Edit a row, change a line, Save Draft.
+      // From Overview, Edit a row, change a line, Save Draft. Draft write — no Update Invoice flow.
       await edit.first().click();
       await expect(appFrame.getByText('Edit Invoice', { exact: true })).toBeVisible({
         timeout: 30000,
@@ -1653,6 +1694,7 @@ test.describe('Create Invoice regression', () => {
     });
 
     test('CI-057 Flagged invoice can be edited and resubmitted', async ({ page }, testInfo) => {
+      test.setTimeout(600000);
       const persona = activePersona(testInfo);
       await openCreateInvoice(page, persona);
       const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
@@ -1678,8 +1720,22 @@ test.describe('Create Invoice regression', () => {
       await expect(desc).toBeVisible();
       await desc.click();
       await desc.fill(`${LINE_DESCRIPTION} flagged resubmit`);
+      const invoiceNumber = (
+        (await appFrame.getByPlaceholder('Invoice number').inputValue().catch(() => '')) || ''
+      ).trim();
+      const selectedLabels = appFrame.getByRole('button', { name: /^Selected:/ });
+      const partnerLabel = ((await selectedLabels.nth(0).innerText().catch(() => '')) || '')
+        .replace(/^Selected:\s*/i, '')
+        .trim();
+      const projectLabel = ((await selectedLabels.nth(1).innerText().catch(() => '')) || '')
+        .replace(/^Selected:\s*/i, '')
+        .trim();
+      const known = fixtureByProjectName(projectLabel);
       const submit = appFrame.getByRole('button', { name: 'Submit' });
-      if (await submit.isEnabled({ timeout: 8000 }).catch(() => false)) {
+      const canSubmit = await submit.isEnabled({ timeout: 8000 }).catch(() => false);
+      const session = canSubmit && dataverseToken ? beginFlowCapture(page, dataverseToken) : null;
+      const submitStartedAt = new Date().toISOString();
+      if (canSubmit) {
         await submit.click();
         await expect(appFrame.getByText('Invoice Overview', { exact: true }).first()).toBeVisible({
           timeout: 30000,
@@ -1698,6 +1754,25 @@ test.describe('Create Invoice regression', () => {
           testInfo
         );
       });
+
+      if (session) {
+        await page.close().catch(() => undefined);
+        const evidence = await captureSubmitFlowEvidence({
+          token: dataverseToken,
+          testInfo,
+          session,
+          action: 'Update',
+          project: {
+            partnerName: known?.partnerName ?? partnerLabel ?? '(unknown partner)',
+            projectName: known?.projectName ?? projectLabel ?? '(unknown project)',
+            region: known?.region,
+            projectId: known?.projectId,
+          },
+          submitStartedAt,
+          invoiceNumber: invoiceNumber || undefined,
+        });
+        assertSubmitFlowEvidence(evidence);
+      }
     });
   });
 });

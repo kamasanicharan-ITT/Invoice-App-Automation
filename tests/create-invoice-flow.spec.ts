@@ -1,8 +1,8 @@
 // spec: specs/create-invoice-test-plan.md
 // seed: tests/seed.spec.ts
 //
-// Admin DEV: same Create Invoice path as TC-CI-42 (adhoc NA submit), then attach
-// the Create Invoice NA Power Automate flow run (flow-report.md / .json).
+// Admin DEV: Submit NA vs non-NA invoices and attach Create/Update region flow
+// evidence (invoice-submit-evidence.md, flow-family.md, invoice-audit.md).
 
 import { test, expect, type Page, type FrameLocator, type TestInfo } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
@@ -17,31 +17,12 @@ import {
   type CreateInvoiceFixtures,
   type ProjectFixture,
 } from './utils/dataverse-fixtures';
+import { isNorthAmericaRegion } from './utils/flow-runs';
 import {
-  attachFlowNetworkCapture,
-  buildFlowNameMap,
-  capturePostSubmitFlowReport,
-  expectedCreateInvoiceFlowPattern,
-  isNorthAmericaRegion,
-  isSuccessfulFlowStatus,
-  listCloudFlows,
-  listRecentFlowRuns,
-  regionKindFromFixture,
-} from './utils/flow-runs';
-import { captureInvoiceAudit } from './utils/flow-audit';
-import { captureFlowFamilyReport } from './utils/flow-family';
-
-/** Flowruns lags; the invoice row is the real signal. Override with FLOW_WAIT_MS / INVOICE_WAIT_MS. */
-const FLOW_WAIT_MS = Number(process.env.FLOW_WAIT_MS ?? 30000);
-// Parent flows contain a Delay + Do-until, so terminal status can take minutes.
-const INVOICE_WAIT_MS = Number(process.env.INVOICE_WAIT_MS ?? 180000);
-/**
- * The invoice row settles in ~10s and is the authoritative outcome; the flowruns table
- * lags erratically (58s to over 3 min for the same flow). So take a short sweep for run
- * IDs after the invoice settles and note whatever has not synced yet.
- */
-const FAMILY_WAIT_MS = Number(process.env.FAMILY_WAIT_MS ?? 30000);
-const FAMILY_CHILD_GRACE_MS = Number(process.env.FAMILY_CHILD_GRACE_MS ?? 15000);
+  assertSubmitFlowEvidence,
+  beginFlowCapture,
+  captureSubmitFlowEvidence,
+} from './utils/invoice-submit-flows';
 
 type Scenario = {
   id: string;
@@ -555,8 +536,7 @@ test.describe('Create Invoice region flows (Admin)', () => {
       );
     }
 
-    const networkHits = attachFlowNetworkCapture(page);
-    const baselinePromise = listRecentFlowRuns(dataverseToken, { top: 100 });
+    const session = beginFlowCapture(page, dataverseToken);
 
     const appFrame = await openCreateInvoice(page);
     await setAdhoc(appFrame, true);
@@ -657,17 +637,6 @@ test.describe('Create Invoice region flows (Admin)', () => {
     await submitBtn.click();
     await awaitSubmitNavigatedToOverview(appFrame);
 
-    const baseline = await baselinePromise;
-    const capture = {
-      networkHits,
-      baselineRunIds: new Set(
-        (baseline.ok ? baseline.runs : [])
-          .map((r) => r.flowrunid || r.name)
-          .filter((id): id is string => !!id)
-      ),
-      submitStartedAt,
-    };
-
     await test.step(`Submitted ${scenario.label} invoice — Invoice Overview`, async () => {
       await markGroupAndShot(
         page,
@@ -681,214 +650,40 @@ test.describe('Create Invoice region flows (Admin)', () => {
       );
     });
 
-    const regionKind = regionKindFromFixture(project!.region);
-    expect(regionKind).toBe(scenario.regionKind);
-    const expectedPattern = expectedCreateInvoiceFlowPattern(regionKind);
-    console.log(`Expected Create Invoice flow pattern: ${expectedPattern}`);
-
     // UI work is done. Everything below is Dataverse polling, so close the browser rather
     // than leaving it parked on Invoice Overview while flows finish.
     await page.close().catch(() => undefined);
     console.log('Browser closed — waiting on Dataverse for flow completion');
 
-    const report = await capturePostSubmitFlowReport({
+    const evidence = await captureSubmitFlowEvidence({
       token: dataverseToken,
       testInfo,
+      session,
       action: 'Submit',
-      regionKind,
       project: {
         partnerName: project!.partnerName,
         projectName: project!.projectName,
         region: project!.region,
+        projectId: project!.projectId,
       },
-      networkHits: capture.networkHits,
-      submitStartedAt: capture.submitStartedAt,
-      baselineRunIds: capture.baselineRunIds,
-      waitMs: FLOW_WAIT_MS,
+      submitStartedAt,
     });
 
-    const audit = await captureInvoiceAudit({
-      token: dataverseToken,
-      testInfo,
-      projectId: project!.projectId,
-      projectName: project!.projectName,
-      partnerName: project!.partnerName,
-      submitStartedAt: capture.submitStartedAt,
-      expectedWorkflowId: report.expectedFlow?.workflowId,
-      matchedRunId: report.matchedCreateFlow?.runId,
-      invoiceWaitMs: INVOICE_WAIT_MS,
-    });
-
-    // Parent flow + every child flow it declares + anything else that fired in the window.
-    const catalog = await listCloudFlows(dataverseToken);
-    const family = report.expectedFlow?.workflowId
-      ? await captureFlowFamilyReport({
-          token: dataverseToken,
-          testInfo,
-          rootWorkflowId: report.expectedFlow.workflowId,
-          catalog: catalog.ok ? catalog.flows : [],
-          flowNameById: buildFlowNameMap(catalog.ok ? catalog.flows : []),
-          submitStartedAt: capture.submitStartedAt,
-          regionLabel: scenario.label,
-          familyWaitMs: FAMILY_WAIT_MS,
-          childGraceMs: FAMILY_CHILD_GRACE_MS,
-        })
-      : null;
-
-    await testInfo.attach(`${scenario.slug}-create-invoice-flow-summary.json`, {
-      body: Buffer.from(
-        JSON.stringify(
-          {
-            partner: project!.partnerName,
-            project: project!.projectName,
-            region: project!.region,
-            regionKind,
-            contractSelected: contractName,
-            product: fixtures.editableProduct!.name,
-            expectedFlow: report.expectedFlow ?? null,
-            expectedFlowLatest: report.expectedFlowLatestRun
-              ? {
-                  name: report.expectedFlowLatestRun.flowName,
-                  status: report.expectedFlowLatestRun.status,
-                  runId: report.expectedFlowLatestRun.runId,
-                  start: report.expectedFlowLatestRun.starttime ?? null,
-                }
-              : null,
-            flowSuccess: report.success,
-            matchedFlow: report.matchedCreateFlow?.flowName ?? null,
-            matchedExpected: report.matchedCreateFlow?.matchedExpected ?? false,
-            matchedStatus: report.matchedCreateFlow?.status ?? null,
-            matchedRunId: report.matchedCreateFlow?.runId ?? null,
-            matchedWorkflowId: report.matchedCreateFlow?.workflowId ?? null,
-            flowError: report.matchedCreateFlow?.errormessage ?? null,
-            networkHits: report.networkHitCount,
-            runCount: report.runs.length,
-            invoiceId: audit.invoice?.id ?? null,
-            invoiceNumber: audit.invoice?.invoiceNumber ?? null,
-            invoiceStatus: audit.invoice?.status ?? null,
-            auditRows: audit.statusTimeline.length,
-            flowStepCount: audit.flowSteps.length,
-            auditSources: audit.sources.map((s) => ({
-              source: s.source,
-              ok: s.ok,
-              status: s.status,
-              rows: s.count,
-            })),
-            family: family
-              ? {
-                  parent: family.rootName,
-                  declaredChildren: family.declaredChildCount,
-                  childFlows: family.nodes
-                    .filter((n) => n.depth > 0)
-                    .map((n) => ({
-                      name: n.name,
-                      state: n.state,
-                      workflowId: n.workflowId,
-                      calledBy: n.calledBy ?? null,
-                    })),
-                  runs: family.runs.map((r) => ({
-                    flow: r.flowName,
-                    role: r.depth === 0 ? 'parent' : r.declared ? `child d${r.depth}` : 'observed',
-                    status: r.status,
-                    runId: r.runId,
-                    durationMs: r.durationMs ?? null,
-                    error: r.errormessage ?? null,
-                  })),
-                  allSucceeded: family.allSucceeded,
-                  missingRuns: family.missingRunFlows.map((m) => m.name),
-                }
-              : null,
-          },
-          null,
-          2
-        ),
-        'utf-8'
-      ),
-      contentType: 'application/json',
-    });
-
+    expect(evidence.regionKind).toBe(scenario.regionKind);
     expect(
-      report.networkHitCount > 0 || report.runs.length > 0 || !!report.expectedFlow,
-      `Expected flow network traffic, new flowrun rows, or ${scenario.flowLabel} catalog info after Submit`
-    ).toBeTruthy();
-    expect(
-      report.expectedFlow?.name,
-      `Expected an On catalog flow matching ${scenario.flowLabel}`
-    ).toBeTruthy();
-    expect(
-      report.expectedFlow?.name ?? '',
+      evidence.expectedLabel,
       `${scenario.label} Submit must map to ${scenario.flowLabel}`
     ).toMatch(scenario.flowNamePattern);
-
-    if (report.matchedCreateFlow) {
-      console.log(
-        `Create Invoice flow: ${report.matchedCreateFlow.flowName} | status=${report.matchedCreateFlow.status} | run=${report.matchedCreateFlow.runId}`
-      );
-      expect
-        .soft(
-          isSuccessfulFlowStatus(report.matchedCreateFlow.status),
-          `Flow "${report.matchedCreateFlow.flowName}" status=${report.matchedCreateFlow.status}` +
-            (report.matchedCreateFlow.errormessage
-              ? ` err=${report.matchedCreateFlow.errormessage}`
-              : '')
-        )
-        .toBeTruthy();
-    }
-
-    // The invoice row is the authoritative outcome: the flow stamps the number and
-    // moves status off Draft, or writes Fail-Creation when it breaks.
-    expect(audit.invoiceFound, 'Submit should create a dia_invoicedetails row').toBeTruthy();
-    console.log(
-      `Invoice row: #${audit.invoice?.invoiceNumber || '(none)'} status=${audit.invoice?.status ?? '?'} id=${audit.invoice?.id ?? '?'}`
-    );
+    assertSubmitFlowEvidence(evidence);
     expect
-      .soft(
-        audit.invoice?.status ?? '',
-        'Create flow must not land the invoice in Fail-Creation'
-      )
-      .not.toMatch(/^Fail-/i);
-    expect
-      .soft(audit.invoice?.invoiceNumber ?? '', 'Create flow should stamp an invoice number')
+      .soft(evidence.audit.invoice?.invoiceNumber ?? '', 'Create flow should stamp an invoice number')
       .not.toBe('');
 
-    if (family) {
-      console.log(
-        `Family: parent ${family.rootName}, ${family.declaredChildCount} declared child flow(s), ` +
-          `${family.runs.length} run(s) tracked, ` +
-          (family.runs.length === 0
-            ? 'no run rows synced within the sweep window'
-            : `allSucceeded=${family.allSucceeded}`)
-      );
-      for (const run of family.runs) {
-        expect
-          .soft(
-            isSuccessfulFlowStatus(run.status),
-            `${run.depth === 0 ? 'Parent' : 'Child'} flow "${run.flowName}" status=${run.status}` +
-              (run.errormessage ? ` err=${run.errormessage}` : '')
-          )
-          .toBeTruthy();
-      }
-      // flowruns only lands a parent run row once that flow completes, and the parent
-      // holds a Delay + Do-until. A terminal non-Fail invoice status proves the parent
-      // finished even when its run row has not synced yet, so accept either proof.
-      const parentTracked = family.runs.some((r) => r.depth === 0);
-      const invoiceSettledOk = /^(Submitted|Reviewed|Approved|Sent)/i.test(
-        audit.invoice?.status ?? ''
-      );
-      if (!parentTracked) {
-        console.log(
-          `Parent run row for ${family.rootName} had not synced to flowruns within ` +
-            `${Math.round(FAMILY_WAIT_MS / 1000)}s; invoice status=${audit.invoice?.status ?? '?'}`
-        );
-      }
-      expect
-        .soft(
-          parentTracked || invoiceSettledOk,
-          `Neither a parent run row for ${family.rootName} nor a settled invoice status ` +
-            `(got "${audit.invoice?.status ?? '?'}") confirmed the parent flow completed`
-        )
-        .toBeTruthy();
-    }
+    const fired = evidence.slots.filter((s) => s.fired).map((s) => s.label);
+    console.log(
+      `${scenario.label} main flows fired: ${fired.length ? fired.join(', ') : '(none synced yet)'}` +
+        ` | invoice #${evidence.audit.invoice?.invoiceNumber || '(none)'} status=${evidence.audit.invoice?.status ?? '?'}`
+    );
   }
 
   test('TC-CIF-01: [Admin] Submit NA invoice — track Create Invoice - NA Region family', async ({

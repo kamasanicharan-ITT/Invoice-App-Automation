@@ -306,6 +306,66 @@ export function findExpectedCreateInvoiceFlows(
   return flows.filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
 }
 
+export function findExpectedUpdateInvoiceFlows(
+  flows: WorkflowRow[],
+  regionKind: 'north-america' | 'other' | 'unknown'
+): WorkflowRow[] {
+  const pattern = expectedUpdateInvoiceFlowPattern(regionKind);
+  return flows.filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
+}
+
+/** The four parent flows that own Create Invoice Submit / Edit-resubmit. */
+export type MainInvoiceFlowKey = 'create-na' | 'create-other' | 'update-na' | 'update-other';
+
+export const MAIN_INVOICE_FLOW_LABELS: Record<MainInvoiceFlowKey, string> = {
+  'create-na': 'Create Invoice - NA Region',
+  'create-other': 'Create Invoice - Other Region',
+  'update-na': 'Update Invoice - NA Region',
+  'update-other': 'Update Invoice - Other Region',
+};
+
+function preferOnFlow(matches: WorkflowRow[]): WorkflowRow | undefined {
+  return matches.find((f) => f.statecode === 1) ?? matches[0];
+}
+
+/**
+ * Resolve the four Create/Update × NA/Other catalog rows from the modern-flow list.
+ * Name matching is conservative so "Update Invoice - NA" never counts as Create.
+ */
+export function pickMainInvoiceFlows(flows: WorkflowRow[]): Record<
+  MainInvoiceFlowKey,
+  WorkflowRow | undefined
+> {
+  const named = (test: (name: string) => boolean) =>
+    preferOnFlow(flows.filter((f) => test(f.name ?? '')));
+
+  return {
+    'create-na': named(
+      (n) => /create\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/update/i.test(n)
+    ),
+    'create-other': named(
+      (n) => /create\s*invoice/i.test(n) && /other/i.test(n) && !/update/i.test(n)
+    ),
+    'update-na': named(
+      (n) => /update\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/create/i.test(n)
+    ),
+    'update-other': named(
+      (n) => /update\s*invoice/i.test(n) && /other/i.test(n) && !/create/i.test(n)
+    ),
+  };
+}
+
+export function expectedMainFlowKey(
+  action: 'Submit' | 'Update',
+  regionKind: 'north-america' | 'other' | 'unknown'
+): MainInvoiceFlowKey | undefined {
+  if (regionKind === 'unknown') return undefined;
+  if (action === 'Submit') {
+    return regionKind === 'north-america' ? 'create-na' : 'create-other';
+  }
+  return regionKind === 'north-america' ? 'update-na' : 'update-other';
+}
+
 export function attachFlowNetworkCapture(page: Page): CapturedFlowCall[] {
   const hits: CapturedFlowCall[] = [];
   page.on('request', (req: Request) => {
@@ -458,8 +518,8 @@ export async function attachFlowReport(
     `# Flow report — ${report.action}`,
     '',
     `- Region kind: **${report.regionKind}**`,
-    `- Expected create flow pattern: \`${report.expectedFlowNamePattern}\``,
-    `- Expected create flow: **${report.expectedFlow?.name ?? '(not in catalog)'}** (${report.expectedFlow?.state ?? 'n/a'})`,
+    `- Expected parent flow pattern: \`${report.expectedFlowNamePattern}\``,
+    `- Expected parent flow: **${report.expectedFlow?.name ?? '(not in catalog)'}** (${report.expectedFlow?.state ?? 'n/a'})`,
     report.expectedFlow?.workflowId ? `- Expected workflow id: ${report.expectedFlow.workflowId}` : '',
     `- Submit started: ${report.submitStartedAt}`,
     `- Project: ${
@@ -471,7 +531,7 @@ export async function attachFlowReport(
     `- Network flow hits: ${report.networkHitCount}`,
     `- Overall success: **${report.success ? 'YES' : 'NO'}**`,
     '',
-    '## Latest run of expected Create Invoice flow (catalog)',
+    `## Latest run of expected ${report.action === 'Update' ? 'Update' : 'Create'} Invoice flow (catalog)`,
     report.expectedFlowLatestRun
       ? [
           `- Name: **${report.expectedFlowLatestRun.flowName}**`,
@@ -483,9 +543,9 @@ export async function attachFlowReport(
             ? `- Error: ${report.expectedFlowLatestRun.errorcode ?? ''} ${report.expectedFlowLatestRun.errormessage}`
             : '- Error: (none)',
         ].join('\n')
-      : '_No runs found for the expected Create Invoice flow._',
+      : `_No runs found for the expected ${report.action === 'Update' ? 'Update' : 'Create'} Invoice flow._`,
     '',
-    '## Matched create flow (this Submit)',
+    `## Matched ${report.action === 'Update' ? 'update' : 'create'} flow (this ${report.action})`,
     report.matchedCreateFlow
       ? [
           `- Name: **${report.matchedCreateFlow.flowName}**`,
@@ -498,7 +558,7 @@ export async function attachFlowReport(
             ? `- Error: ${report.matchedCreateFlow.errorcode ?? ''} ${report.matchedCreateFlow.errormessage ?? ''}`
             : '- Error: (none)',
         ].join('\n')
-      : '_No matching create-invoice flow run found in poll window._',
+      : `_No matching ${report.action === 'Update' ? 'update' : 'create'}-invoice flow run found in poll window._`,
     '',
     '## All runs since submit',
     ...(report.runs.length
@@ -543,22 +603,29 @@ export async function capturePostSubmitFlowReport(opts: {
   waitMs?: number;
 }): Promise<FlowReport> {
   const action = opts.action ?? 'Submit';
-  const expectedPattern = expectedCreateInvoiceFlowPattern(opts.regionKind);
+  const expectedPattern =
+    action === 'Update'
+      ? expectedUpdateInvoiceFlowPattern(opts.regionKind)
+      : expectedCreateInvoiceFlowPattern(opts.regionKind);
   const notes: string[] = [];
 
   const inventory = await listCloudFlows(opts.token);
   const flowNameById = buildFlowNameMap(inventory.ok ? inventory.flows : []);
   const expectedFlows = inventory.ok
-    ? findExpectedCreateInvoiceFlows(inventory.flows, opts.regionKind)
+    ? action === 'Update'
+      ? findExpectedUpdateInvoiceFlows(inventory.flows, opts.regionKind)
+      : findExpectedCreateInvoiceFlows(inventory.flows, opts.regionKind)
     : [];
   if (!inventory.ok) {
     notes.push(`Cloud flow inventory failed: ${inventory.status} ${inventory.errorSnippet}`);
   } else {
-    const createNamed = inventory.flows.filter((f) => /create\s*invoice/i.test(f.name ?? ''));
-    notes.push(
-      `Inventory: ${inventory.flows.length} modern flows; ${createNamed.length} name-match Create Invoice*`
+    const namedParents = inventory.flows.filter((f) =>
+      /(create|update)\s*invoice/i.test(f.name ?? '')
     );
-    for (const f of createNamed.slice(0, 12)) {
+    notes.push(
+      `Inventory: ${inventory.flows.length} modern flows; ${namedParents.length} name-match Create/Update Invoice*`
+    );
+    for (const f of namedParents.slice(0, 16)) {
       notes.push(
         `  catalog: ${f.name} (${f.statecode === 1 ? 'On' : 'Off'}) id=${f.workflowid ?? '?'}`
       );
@@ -601,15 +668,18 @@ export async function capturePostSubmitFlowReport(opts: {
     notes.push('flowruns table not readable — relying on network capture + UI status.');
   }
 
+  const parentNameRe = action === 'Update' ? /update\s*invoice/i : /create\s*invoice/i;
   let summaries = toFlowRunSummaries(runs, flowNameById, expectedPattern);
-  if (!summaries.some((s) => s.matchedExpected || /create\s*invoice/i.test(s.flowName))) {
+  if (!summaries.some((s) => s.matchedExpected || parentNameRe.test(s.flowName))) {
     const sampleHits = toFlowRunSummaries(latestSample, flowNameById, expectedPattern).filter(
       (s) =>
-        (s.matchedExpected || /create\s*invoice/i.test(s.flowName)) &&
+        (s.matchedExpected || parentNameRe.test(s.flowName)) &&
         ((s.starttime && Date.parse(s.starttime) >= sinceMs) || !s.starttime)
     );
     if (sampleHits.length) {
-      notes.push('Matched Create Invoice run from latest org sample (not in new-id window).');
+      notes.push(
+        `Matched ${action === 'Update' ? 'Update' : 'Create'} Invoice run from latest org sample (not in new-id window).`
+      );
       const seen = new Set(summaries.map((s) => s.runId));
       summaries = [...summaries, ...sampleHits.filter((s) => !seen.has(s.runId))];
     }
@@ -621,7 +691,7 @@ export async function capturePostSubmitFlowReport(opts: {
   const matchedCreateFlow =
     expectedNewSummaries.find((s) => s.matchedExpected) ||
     summaries.find((s) => s.matchedExpected) ||
-    summaries.find((s) => /create\s*invoice/i.test(s.flowName)) ||
+    summaries.find((s) => parentNameRe.test(s.flowName)) ||
     expectedLatestSummary;
 
   const expectedFlow = expectedFlows[0]
@@ -649,7 +719,7 @@ export async function capturePostSubmitFlowReport(opts: {
   }
   if (!expectedNewRuns.length && readable) {
     notes.push(
-      'No new Create Invoice NA flowrun after this Submit — reporting latest catalog run + other new runs.'
+      `No new ${action === 'Update' ? 'Update' : 'Create'} Invoice flowrun after this ${action} — reporting latest catalog run + other new runs.`
     );
   }
   if (networkHitCount > 0) {
