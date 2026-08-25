@@ -1,0 +1,254 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Invoice-App-Automation\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "tests/Create-Invoice-complete.spec.ts",
+      "--project=chromium-admin",
+      "--retries=0",
+      "-g",
+      "CI-003",
+      "--reporter=json"
+    ],
+    "configFile": "C:\\Invoice-App-Automation\\playwright.config.ts",
+    "rootDir": "C:/Invoice-App-Automation/tests",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Invoice-App-Automation/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "C:/Invoice-App-Automation/tests",
+        "testIgnore": [
+          "**/dataverse-explorer.spec.ts",
+          "**/dataverse-schema.spec.ts",
+          "**/dataverse-schema-export.spec.ts",
+          "**/flow-tracking.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 90000
+      },
+      {
+        "outputDir": "C:/Invoice-App-Automation/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium-admin",
+        "name": "chromium-admin",
+        "testDir": "C:/Invoice-App-Automation/tests",
+        "testIgnore": [
+          "**/dataverse-explorer.spec.ts",
+          "**/dataverse-schema.spec.ts",
+          "**/dataverse-schema-export.spec.ts",
+          "**/flow-tracking.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 90000
+      },
+      {
+        "outputDir": "C:/Invoice-App-Automation/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium-pm",
+        "name": "chromium-pm",
+        "testDir": "C:/Invoice-App-Automation/tests",
+        "testIgnore": [
+          "**/dataverse-explorer.spec.ts",
+          "**/dataverse-schema.spec.ts",
+          "**/dataverse-schema-export.spec.ts",
+          "**/flow-tracking.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 90000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 4,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "Create-Invoice-complete.spec.ts",
+      "file": "Create-Invoice-complete.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Create Invoice regression",
+          "file": "Create-Invoice-complete.spec.ts",
+          "line": 45,
+          "column": 6,
+          "specs": [],
+          "suites": [
+            {
+              "title": "Start with last invoice",
+              "file": "Create-Invoice-complete.spec.ts",
+              "line": 329,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "CI-003 Start with last invoice prefills line items not dates or invoice number",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 120000,
+                      "annotations": [
+                        {
+                          "type": "observed",
+                          "description": "prefilled [{\"description\":\"Automation line item ΓÇö Create Invoice suite\",\"quantity\":1,\"rate\":100}] | last invoice 2026-07-31 [{\"description\":\"Automation line item ΓÇö Create Invoice suite\",\"quantity\":1,\"rate\":100}]"
+                        }
+                      ],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium-admin",
+                      "projectName": "chromium-admin",
+                      "results": [
+                        {
+                          "workerIndex": 0,
+                          "parallelIndex": 0,
+                          "status": "passed",
+                          "duration": 29867,
+                          "errors": [],
+                          "stdout": [
+                            {
+                              "text": "Region option map loaded: \u001b[33m8\u001b[39m values\n"
+                            },
+                            {
+                              "text": "Create Invoice fixtures:\n"
+                            },
+                            {
+                              "text": "  eligibleNonAdhoc (no duplicate): IDLA AUS / AUS GOV CONS [Australia]\n"
+                            },
+                            {
+                              "text": "  duplicateNonAdhoc: HP Inc. / HP ITSM MPS QA [North America]\n"
+                            },
+                            {
+                              "text": "  noLastMonthInvoice: Kubota / Kobota Furlow [North America]\n"
+                            },
+                            {
+                              "text": "  withLastInvoice (prefill source): IDLA AUS / AUS GOV CONS [Australia]\n"
+                            },
+                            {
+                              "text": "  northAmerica: AOC / Home Publishing [North America]\n"
+                            },
+                            {
+                              "text": "  nonNorthAmerica: IDLA AUS / AUS GOV CONS [Australia]\n"
+                            },
+                            {
+                              "text": "  editableProduct: IT Retainer\n"
+                            },
+                            {
+                              "text": "  nonEditableProduct: Abundance Coaching\n"
+                            }
+                          ],
+                          "stderr": [],
+                          "retry": 0,
+                          "steps": [
+                            {
+                              "title": "Line items prefilled from last invoice",
+                              "duration": 1178
+                            }
+                          ],
+                          "startTime": "2026-08-20T04:16:34.758Z",
+                          "annotations": [
+                            {
+                              "type": "observed",
+                              "description": "prefilled [{\"description\":\"Automation line item ΓÇö Create Invoice suite\",\"quantity\":1,\"rate\":100}] | last invoice 2026-07-31 [{\"description\":\"Automation line item ΓÇö Create Invoice suite\",\"quantity\":1,\"rate\":100}]"
+                            }
+                          ],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-0871a-not-dates-or-invoice-number-chromium-admin\\test-finished-1.png"
+                            },
+                            {
+                              "name": "Line items prefilled from last invoice",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-0871a-not-dates-or-invoice-number-chromium-admin\\attachments\\Line-items-prefilled-from-last-invoice-31214084df49f7eccdb78e74ff61fe7b46d2fb06.png"
+                            },
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-0871a-not-dates-or-invoice-number-chromium-admin\\test-finished-2.png"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "a38c6b63767d51830444-5572af24cfe984b5e911",
+                  "file": "Create-Invoice-complete.spec.ts",
+                  "line": 330,
+                  "column": 9
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-08-20T04:16:34.168Z",
+    "duration": 43794.687,
+    "expected": 1,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
