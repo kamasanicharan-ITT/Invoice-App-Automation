@@ -1,0 +1,305 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Invoice-App-Automation\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "tests/Create-Invoice-complete.spec.ts",
+      "--project=chromium-admin",
+      "--retries=0",
+      "-g",
+      "CI-034 Deleting|CI-038 Rate",
+      "--reporter=json"
+    ],
+    "configFile": "C:\\Invoice-App-Automation\\playwright.config.ts",
+    "rootDir": "C:/Invoice-App-Automation/tests",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Invoice-App-Automation/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "C:/Invoice-App-Automation/tests",
+        "testIgnore": [
+          "**/dataverse-explorer.spec.ts",
+          "**/dataverse-schema.spec.ts",
+          "**/dataverse-schema-export.spec.ts",
+          "**/flow-tracking.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 90000
+      },
+      {
+        "outputDir": "C:/Invoice-App-Automation/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium-admin",
+        "name": "chromium-admin",
+        "testDir": "C:/Invoice-App-Automation/tests",
+        "testIgnore": [
+          "**/dataverse-explorer.spec.ts",
+          "**/dataverse-schema.spec.ts",
+          "**/dataverse-schema-export.spec.ts",
+          "**/flow-tracking.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 90000
+      },
+      {
+        "outputDir": "C:/Invoice-App-Automation/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium-pm",
+        "name": "chromium-pm",
+        "testDir": "C:/Invoice-App-Automation/tests",
+        "testIgnore": [
+          "**/dataverse-explorer.spec.ts",
+          "**/dataverse-schema.spec.ts",
+          "**/dataverse-schema-export.spec.ts",
+          "**/flow-tracking.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 90000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 4,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "Create-Invoice-complete.spec.ts",
+      "file": "Create-Invoice-complete.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Create Invoice regression",
+          "file": "Create-Invoice-complete.spec.ts",
+          "line": 48,
+          "column": 6,
+          "specs": [],
+          "suites": [
+            {
+              "title": "Line items",
+              "file": "Create-Invoice-complete.spec.ts",
+              "line": 811,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "CI-034 Deleting a line item removes only that row",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 120000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium-admin",
+                      "projectName": "chromium-admin",
+                      "results": [
+                        {
+                          "workerIndex": 0,
+                          "parallelIndex": 0,
+                          "status": "passed",
+                          "duration": 24469,
+                          "errors": [],
+                          "stdout": [
+                            {
+                              "text": "Region option map loaded: \u001b[33m8\u001b[39m values\n"
+                            },
+                            {
+                              "text": "Create Invoice fixtures:\n"
+                            },
+                            {
+                              "text": "  eligibleNonAdhoc (no duplicate): IDLA AUS / AUS GOV CONS [Australia]\n"
+                            },
+                            {
+                              "text": "  duplicateNonAdhoc: HP Inc. / HP ITSM MPS QA [North America]\n"
+                            },
+                            {
+                              "text": "  noLastMonthInvoice: Kubota / Kobota Furlow [North America]\n"
+                            },
+                            {
+                              "text": "  withLastInvoice (prefill source): IDLA AUS / AUS GOV CONS [Australia]\n"
+                            },
+                            {
+                              "text": "  northAmerica: AOC / Home Publishing [North America]\n"
+                            },
+                            {
+                              "text": "  nonNorthAmerica: IDLA AUS / AUS GOV CONS [Australia]\n"
+                            },
+                            {
+                              "text": "  editableProduct: IT Retainer\n"
+                            },
+                            {
+                              "text": "  nonEditableProduct: Abundance Coaching\n"
+                            }
+                          ],
+                          "stderr": [],
+                          "retry": 0,
+                          "steps": [
+                            {
+                              "title": "Deleted extra line item row",
+                              "duration": 998
+                            }
+                          ],
+                          "startTime": "2026-08-20T08:58:59.878Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-d733a--item-removes-only-that-row-chromium-admin\\test-finished-1.png"
+                            },
+                            {
+                              "name": "Deleted extra line item row",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-d733a--item-removes-only-that-row-chromium-admin\\attachments\\Deleted-extra-line-item-row-54eea2c5c83fbde84a780a1c4d5558b2c9e1395c.png"
+                            },
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-d733a--item-removes-only-that-row-chromium-admin\\test-finished-2.png"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "a38c6b63767d51830444-a5a39d65b69ab3f0bbc6",
+                  "file": "Create-Invoice-complete.spec.ts",
+                  "line": 928,
+                  "column": 9
+                },
+                {
+                  "title": "CI-038 Rate accepts at most 4 decimal places",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 120000,
+                      "annotations": [
+                        {
+                          "type": "observed",
+                          "description": "Rate entered \"10.12345\" ΓÇö field shows \"0\""
+                        }
+                      ],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium-admin",
+                      "projectName": "chromium-admin",
+                      "results": [
+                        {
+                          "workerIndex": 0,
+                          "parallelIndex": 0,
+                          "status": "passed",
+                          "duration": 25026,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "steps": [
+                            {
+                              "title": "Rate decimal precision",
+                              "duration": 909
+                            }
+                          ],
+                          "startTime": "2026-08-20T08:59:53.397Z",
+                          "annotations": [
+                            {
+                              "type": "observed",
+                              "description": "Rate entered \"10.12345\" ΓÇö field shows \"0\""
+                            }
+                          ],
+                          "attachments": [
+                            {
+                              "name": "Rate decimal precision",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-6d977-ts-at-most-4-decimal-places-chromium-admin\\attachments\\Rate-decimal-precision-294d9aa73b8c871c4bb74d8a069b6411be5f10ce.png"
+                            },
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Invoice-App-Automation\\test-results\\Create-Invoice-complete-Cr-6d977-ts-at-most-4-decimal-places-chromium-admin\\test-finished-1.png"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "a38c6b63767d51830444-5a2754250ad282e624a6",
+                  "file": "Create-Invoice-complete.spec.ts",
+                  "line": 985,
+                  "column": 9
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-08-20T08:58:58.462Z",
+    "duration": 81070.119,
+    "expected": 2,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
