@@ -19,8 +19,9 @@ See `.cursor/rules/30-roles-and-security` and `config/env.ts`.
 
 `<env>` is `dev`, `sit`, `qa`, or `uat`. `auth/` is git-ignored. Never commit these files.
 
-DEV also accepts legacy flat files `auth/admin.json` / `auth/pm.json` if the nested
-path is missing.
+Save files **directly** under `auth/<env>/` (e.g. `auth/sit/pm.json`). Do **not** create a
+nested `auth/sit/auth/` folder, and do **not** keep `auth/admin.json` or `auth/pm.json` at
+the `auth/` root.
 
 ## Capture procedure (per persona, per env)
 

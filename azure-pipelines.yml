@@ -1,14 +1,29 @@
 # Invoice Canvas Playwright — manual E2E only.
-# Does not run on git push or PRs. After ApplicationComponents deploy + post-deploy,
-# open this pipeline → Run pipeline.
+# Does not run on git push or PRs. After ApplicationComponents deploy + post-deploy:
+# Pipelines → Invoice-E2E → Run pipeline → pick Environment.
 trigger: none
 pr: none
+
+parameters:
+  - name: targetEnv
+    displayName: Environment
+    type: string
+    default: dev
+    values:
+      - dev
+      - qa
+      - sit
+      - uat
+  - name: runPm
+    displayName: Also run PM smoke (needs auth-<env>-pm.json)
+    type: boolean
+    default: false
 
 pool:
   vmImage: ubuntu-latest
 
 variables:
-  - group: invoice-e2e-dev
+  - group: invoice-e2e-${{ parameters.targetEnv }}
 
 steps:
   - checkout: self
@@ -22,13 +37,31 @@ steps:
     name: adminAuth
     displayName: Download Admin storageState
     inputs:
-      secureFile: 'auth-dev-admin.json'
+      secureFile: 'auth-${{ parameters.targetEnv }}-admin.json'
+
+  - ${{ if eq(parameters.runPm, true) }}:
+      - task: DownloadSecureFile@1
+        name: pmAuth
+        displayName: Download PM storageState
+        inputs:
+          secureFile: 'auth-${{ parameters.targetEnv }}-pm.json'
 
   - script: |
       set -e
-      mkdir -p auth/dev
-      cp "$(adminAuth.secureFilePath)" auth/dev/admin.json
-    displayName: Place auth/dev/admin.json
+      mkdir -p "auth/${TARGET_ENV}"
+      cp "$(adminAuth.secureFilePath)" "auth/${TARGET_ENV}/admin.json"
+    displayName: Place auth/<env>/admin.json
+    env:
+      TARGET_ENV: ${{ parameters.targetEnv }}
+
+  - ${{ if eq(parameters.runPm, true) }}:
+      - script: |
+          set -e
+          mkdir -p "auth/${TARGET_ENV}"
+          cp "$(pmAuth.secureFilePath)" "auth/${TARGET_ENV}/pm.json"
+        displayName: Place auth/<env>/pm.json
+        env:
+          TARGET_ENV: ${{ parameters.targetEnv }}
 
   - script: npm ci
     displayName: npm ci
@@ -41,6 +74,13 @@ steps:
     env:
       ENV: $(ENV)
       CI: $(CI)
+
+  - ${{ if eq(parameters.runPm, true) }}:
+      - script: npx playwright test tests/smoke.spec.ts --project=chromium-pm
+        displayName: Run PM smoke
+        env:
+          ENV: $(ENV)
+          CI: $(CI)
 
   - task: PublishTestResults@2
     displayName: Publish JUnit results

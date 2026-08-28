@@ -6,8 +6,7 @@
  *   Optional overrides: APP_URL, DATAVERSE_URL, TENANT_ID
  *
  * Auth (gitignored):
- *   Preferred: auth/<env>/admin.json  and  auth/<env>/pm.json
- *   DEV fallback: auth/admin.json / auth/pm.json (legacy flat layout)
+ *   auth/<env>/admin.json  and  auth/<env>/pm.json  (env = dev|sit|qa|uat)
  *
  * Personas:
  *   admin — your account (BDU + Security Roles admin)
@@ -15,7 +14,6 @@
  *
  * Production is forbidden.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 
 export type AppEnvName = 'dev' | 'sit' | 'qa' | 'uat';
@@ -43,8 +41,10 @@ const ENV_DEFAULTS: Record<
     tenantId: TENANT_ID_DEFAULT,
   },
   sit: {
-    appUrl: '',
-    dataverseUrl: '',
+    // Integration (promote path: DEV → Integration). Stable play URL — no hint/sourcetime.
+    appUrl:
+      'https://apps.powerapps.com/play/e/79c21f0b-a316-e119-bf83-780948e33ed1/a/81e12109-734a-4c25-b0ce-ae16cfb13d85?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a',
+    dataverseUrl: 'https://integration-itt-apps.crm8.dynamics.com',
     tenantId: TENANT_ID_DEFAULT,
   },
   qa: {
@@ -55,8 +55,9 @@ const ENV_DEFAULTS: Record<
     tenantId: TENANT_ID_DEFAULT,
   },
   uat: {
-    appUrl: '',
-    dataverseUrl: '',
+    appUrl:
+      'https://apps.powerapps.com/play/e/a1671fc2-0915-e4ea-922b-97e0dbf565de/a/7fd47da3-752e-4ddf-ae71-d4e505c4e4b5?tenantId=18323149-cc4d-4bff-809d-3eda6caec73a',
+    dataverseUrl: 'https://uat-itt-apps.crm8.dynamics.com',
     tenantId: TENANT_ID_DEFAULT,
   },
 };
@@ -77,12 +78,7 @@ function parseEnvName(raw: string | undefined): AppEnvName {
 }
 
 function resolveAuthPath(envName: AppEnvName, persona: 'admin' | 'pm'): string {
-  const nested = path.join('auth', envName, `${persona}.json`);
-  const flat = path.join('auth', `${persona}.json`);
-  if (fs.existsSync(nested)) return nested;
-  // DEV-only legacy layout so existing local sessions keep working.
-  if (envName === 'dev' && fs.existsSync(flat)) return flat;
-  return nested;
+  return path.join('auth', envName, `${persona}.json`);
 }
 
 function resolveConfig(): EnvConfig {
