@@ -5,6 +5,7 @@
   "scripts": {
     "test": "playwright test",
     "test:smoke": "playwright test tests/smoke.spec.ts",
+    "test:ci:smoke": "playwright test tests/smoke.spec.ts --project=chromium-admin",
     "test:dashboard": "playwright test tests/dashboard-screen.spec.ts --project=chromium-admin",
     "test:create-invoice": "playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin",
     "test:overview": "playwright test tests/invoice-overview-screen.spec.ts --project=chromium-admin",
