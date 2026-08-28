@@ -1,20 +1,29 @@
-# Introduction 
-TODO: Give a short introduction of your project. Let this section explain the objectives or the motivation behind this project. 
+# Invoice App Automation
 
-# Getting Started
-TODO: Guide users through getting your code up and running on their own system. In this section you can talk about:
-1.	Installation process
-2.	Software dependencies
-3.	Latest releases
-4.	API references
+Playwright end-to-end tests for the **Synergy Invoice Canvas** app (Power Apps). This repo is **tests only**. The Canvas and model-driven apps live in **ApplicationComponents**.
 
-# Build and Test
-TODO: Describe and show how to build your code and run the tests. 
+## Setup and run
 
-# Contribute
-TODO: Explain how other users and developers can contribute to make your code better. 
+Full laptop setup, auth capture, and smoke test: [`specs/automation-setup.md`](specs/automation-setup.md).
 
-If you want to learn more about creating good readme files then refer the following [guidelines](https://docs.microsoft.com/en-us/azure/devops/repos/git/create-a-readme?view=azure-devops). You can also seek inspiration from the below readme files:
-- [ASP.NET Core](https://github.com/aspnet/Home)
-- [Visual Studio Code](https://github.com/Microsoft/vscode)
-- [Chakra Core](https://github.com/Microsoft/ChakraCore)
+```powershell
+npm ci
+npx playwright install chromium
+# capture auth/<env>/admin.json and pm.json (gitignored) — see automation-setup.md
+npx playwright test tests/smoke.spec.ts --project=chromium-admin
+```
+
+Environment: `ENV=dev|sit|qa|uat` (default `dev`). Production is forbidden.
+
+## Layout
+
+| Path | Purpose |
+|------|---------|
+| `tests/` | Playwright specs (one file per screen, plus smoke) |
+| `config/env.ts` | App URL, Dataverse URL, auth paths per env |
+| `specs/` | Screen **plans** and supporting docs — see [`specs/README.md`](specs/README.md) |
+| `auth/` | Signed-in sessions — **never commit** |
+
+## Azure DevOps
+
+Company copy of this repo: **InvoiceAppAutomation**. App deploy stays in **ApplicationComponents**. After an environment is deployed and post-deploy is done, run the test pipeline **manually** (not on every app PR).
