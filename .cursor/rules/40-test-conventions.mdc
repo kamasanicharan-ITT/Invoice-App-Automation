@@ -1,0 +1,82 @@
+---
+description: Playwright test file conventions, imports, and helper catalog for this repo
+globs: tests/**/*.ts
+alwaysApply: false
+---
+
+# Test Conventions
+
+## Imports
+
+Always use this single import line:
+
+```ts
+import { test, expect, request, type Page, type FrameLocator, type Request } from '@playwright/test';
+```
+
+## File header
+
+Generated specs begin with the plan + seed reference comments:
+
+```ts
+// spec: specs/<plan-file>.md
+// seed: tests/seed.spec.ts
+```
+
+## Naming
+
+- Test IDs: `TC-DB-*` / `TC-DV-*` (Dashboard), `CI-*` / `TC-CI-*` / `TC-CIF-*` (Create Invoice), `TC-IO-*` / `IO-*` (Overview).
+- `describe` matches the screen (`Dashboard Screen`, `Create Invoice Screen`, `Invoice Overview Screen`).
+- One spec file per screen: `tests/dashboard-screen.spec.ts`, `create-invoice-screen.spec.ts`, `invoice-overview-screen.spec.ts`.
+
+## Helper functions (reuse; do not reinvent)
+
+- `openDashboard(page)` — navigates to app URL, waits for `Dashboard`, returns `appFrame`.
+- `openCreateInvoice(page)` from `tests/utils/create-invoice-ui.ts`; `openInvoiceOverview(page)` from `tests/utils/invoice-overview-ui.ts`. Both dismiss host dialogs.
+- `getBillingCycleDates()` — returns `{ start, end }` ISO dates for the current billing cycle.
+- `getDataverseCount(token, filterExpression)` — calls Dataverse with filter, returns count.
+- `getDashboardTaskCount(page, appFrame, labelPattern)` — reads a numeric count from the
+  Invoice Tasks section (the ONLY place `waitForTimeout` is allowed).
+- `getLineItemCount(appFrame)` — counts line item rows on the Create Invoice form.
+
+## Assertions
+
+- `expect.soft` for UI structure visibility; hard `expect` for interaction/navigation.
+- Prefer regex over literal counts for dynamic values.
+
+## Marked screenshots (evidence)
+
+Every test should capture clear, self-explanatory evidence using the shared utility
+`tests/utils/screenshot.ts`. NEVER use `locator.screenshot()` for evidence — it crops to the
+element and loses context. Instead:
+
+- `markAndShot(page, target, label, testInfo, options?)` — highlights one element.
+- `markGroupAndShot(page, targets, label, testInfo, options?)` — highlights the **union**
+  bounding box of several elements (nav strips, card rows, open dropdowns, forms). Prefer this
+  when the observation is a group, not a single label.
+- `shot(page, label, testInfo)` — a plain full-context screenshot (e.g. an overview shot).
+
+Rules:
+
+- `target` / `targets` must be frame-scoped Locators (`appFrame.getBy...`) so the overlay is
+  injected into the iframe and lines up with the element(s).
+- Capture AFTER the scenario has loaded (assert visibility first; wait for real data such as a
+  numeric count). Do not screenshot a half-loaded screen.
+- Scroll the group into view (the helper scrolls first/last anchors) before capturing.
+- Prefer **one (or two) group marks per scenario** over many single-label shots.
+- Wrap each captured scenario in a `test.step('<label>')` so the report groups the marked image
+  under a readable step. Keep the `label` identical between the step and the screenshot.
+- The utility settles via `requestAnimationFrame` (no `waitForTimeout`).
+
+```ts
+import { markAndShot, markGroupAndShot } from './utils/screenshot';
+
+await test.step('Summary cards', async () => {
+  await markGroupAndShot(
+    page,
+    [totalInvoices, totalPartners, totalProject, totalRevenue],
+    'Summary cards',
+    testInfo,
+  );
+});
+```

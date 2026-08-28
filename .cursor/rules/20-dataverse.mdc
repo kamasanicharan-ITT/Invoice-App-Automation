@@ -1,0 +1,100 @@
+---
+description: Dataverse schema, billing filters, status filters, and token capture
+globs: tests/**/*.ts
+alwaysApply: false
+---
+
+# Dataverse Backend
+
+- Active Dataverse URL comes from `config/env.ts` (`DATAVERSE_URL` / `ENV=dev|sit|qa|uat`).
+- DEV default: `https://dev-itt-apps.crm8.dynamics.com`
+- Invoice display name: Invoice Details
+- EntitySetName: `dia_invoicedetailses`
+- Primary key: `dia_invoicedetailsid`
+- Partners/projects/contracts differ per env — create seed data in that org, then discover
+  via OData fixtures (`tests/utils/dataverse-fixtures.ts`). Never hardcode DEV GUIDs/names.
+- Capture the Dataverse token with the **active persona** storageState (`auth/<env>/admin.json`
+  or `pm.json`). Admin fixtures are org-wide. PM fixtures are only projects where that user is
+  Submitter, Reviewer, or Approver (Invoice Mail List).
+
+## Key columns
+
+| Column | Use |
+|--------|-----|
+| `dia_status` | Status — plain TEXT (not choice) |
+| `dia_invoicedate` | Invoice Date — all period filters |
+| `dia_invoicenumber` | Auto after submit |
+| `dia_ponumber` | PO Number |
+| `dia_AccountID` | Partner lookup |
+| `dia_ProjectID` | Project lookup |
+| `dia_ServiceStartDate` / `dia_ServiceEndDate` | Service period |
+| `dia_isReported` | Failure reported (`Yes` or blank) |
+| `dia_InternalNotes` | Rich text |
+| `dia_AdhocInvoice` | Yes/No |
+
+## Related tables (Create Invoice)
+
+| Table | EntitySetName | Notes |
+|-------|---------------|-------|
+| Account (Partner) | `accounts` | Partner dropdown |
+| Project | `dia_projects` | LogicalName `dia_project`; Region `ittdev_region`; Partner lookup `ittdev_account`; Name `dia_projectname`; Status Active |
+| Contract | `ittdev_contracts` | Lookup `ittdev_dia_Project` → Project; `ittdev_startdate` / `ittdev_enddate`; `statecode` Active; Name `ittdev_name` |
+| Product/Services | `dia_productserviceses` | Name `dia_productservicename`; Rate `dia_productservicerate`; Type `ittdev_productservicetype` (Editable Rate / Non-Editable Rate / Discount) |
+| Billing Info (line items) | `dia_invoicelineitemdetailses` | Qty `dia_quantity`; Rate `dia_rate`; Total `dia_total`; Invoice lookup `dia_invoiceid` |
+| Invoice Filtering Options | `dia_invoicefilteringoptionses` | This Month / Last Month windows for duplicate checks |
+| Security Roles | `dia_securityroles` | Admin elevation |
+
+## Status values
+
+`Draft, Submitted, Reviewed, Approved, Flagged, Cancelled, Sent,
+Fail-Creation, Fail-Update, Fail-Flag, Fail-Approval, Fail-Review`
+
+**Failed (Dashboard)** = all five `Fail-*` **and** `dia_isReported` blank.
+
+## Billing cycle date filter
+
+Dashboard / Overview "This Month" (Canvas DateAdd, inclusive):
+
+```
+dia_invoicedate ge {6th of current calendar month} and dia_invoicedate le {5th of next month}
+```
+
+On days 1–5 of a calendar month this is the upcoming cycle (not the prior 6→5 window).
+Use `getBillingCycleDates()` — mirror Canvas, do not stay on the previous cycle when day < 6.
+
+Failed tile only: also `dia_isreported` blank. Total Tasks UI = TotalTask − TotalReported.
+
+## Count query pattern
+
+```
+GET {DATAVERSE_URL}/api/data/v9.2/dia_invoicedetailses
+  ?$filter=({status}) and ({date})
+  &$count=true &$top=1 &$select=dia_invoicedetailsid
+```
+
+Headers: `Authorization: Bearer {token}`, OData 4.0, `Prefer: odata.include-annotations="*"`.
+Read total from `@odata.count`.
+
+Example Failed filter:
+
+```
+(dia_status eq 'Fail-Creation' or ... or dia_status eq 'Fail-Review')
+and (dia_isReported eq null or dia_isReported eq '')
+```
+
+## Token capture
+
+Intercept Canvas traffic: `page.on('request')` for `crm8.dynamics.com` with
+`Authorization: Bearer`. Capture in `test.beforeAll` once per describe. Type the
+callback param as `Request` from `@playwright/test`.
+
+```ts
+const onRequest = (req: Request) => {
+  const authHeader = req.headers()['authorization'];
+  if (req.url().includes('crm8.dynamics.com') && authHeader?.startsWith('Bearer ')) {
+    page.off('request', onRequest);
+    resolve(authHeader.replace('Bearer ', ''));
+  }
+};
+page.on('request', onRequest);
+```

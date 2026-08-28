@@ -1,0 +1,75 @@
+---
+description: Power Apps Canvas locator rules for Playwright tests
+globs: tests/**/*.ts
+alwaysApply: false
+---
+
+# Canvas App Locator Conventions
+
+The app renders ENTIRELY inside `iframe[name="fullscreen-app-host"]`. Every locator MUST
+go through the frame first. NEVER write locators directly on the page for Canvas elements.
+
+```ts
+const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
+await expect.soft(appFrame.getByRole('button', { name: 'Dashboard' })).toBeVisible();
+```
+
+## General rules
+
+- Controls are ABSOLUTELY-POSITIONED SIBLINGS — do NOT scope by a label's parent.
+- After open, WAIT for real data (e.g. a row or `/\d+\s*Total\s*Tasks/`) before asserting
+  late controls (dropdowns, pagination).
+- Match ACTUAL app text, including typos (`Quater to Date` / `Last Quater`).
+- Prefer `getByRole` / `getByText` / `getByPlaceholder`. NEVER CSS/appmagic IDs.
+- `getByLabel` does NOT work — use placeholder or text.
+- NEVER hardcode counts — use regex (`/\d+\s*Drafts/`).
+- `expect.soft` for structure; hard `expect` for interaction/navigation.
+- NEVER `waitForTimeout` except inside `getDashboardTaskCount`. No `networkidle`.
+
+## Control patterns by screen
+
+**Invoice Overview / Dashboard filters**
+
+- Period / Region often expose as `getByRole('button', { name })` → options via
+  `getByRole('option', { name })`. Selected value becomes the button name.
+- Unselected Region may show button name `.` (unique on screen).
+- Overview My/All may appear as radiogroup — verify empirically; do not assume.
+
+**Create Invoice**
+
+- Mode radios: prefer `getByText('Brand New')` / `getByText('Start with last invoice')`
+  (Canvas often has no reliable `radio` role here).
+- Toggles: click label text (`Adhoc Invoice`, `Send Instantly`); assert nearby `Yes`/`No`.
+- Partner / Project / Product: open via placeholder text (`Find Partner`, `Find Project`,
+  `Find items`) — not `getByRole('button', { name: /Find Partner/ })`.
+- Options after open: `getByRole('option', { name })`.
+- Delete row: `getByRole('img', { name: /delete/i })`, not button.
+- Dates often visible as `/\d{1,2}\/\d{1,2}\/\d{4}/`.
+- Standard actions (`Close`, `Save Draft`, `Submit`): `getByRole('button', { name })`.
+- Rich text: contenteditable — `.fill()` then `toHaveValue()`.
+
+When unsure, measure with MCP (`count()` / evaluate) before swapping strategies.
+
+## Authentication
+
+Auth via `storageState` in `playwright.config.ts`. NEVER add login code.
+`auth.json` and `auth/` must NEVER be committed.
+
+## Host dialogs (outside Canvas iframe)
+
+Power Apps play host can intermittently show:
+
+1. **Consent** — "Allow Invoice Application to access your data?" → click **Allow**
+2. **Connector alerts** — `[role=alert]` with Close (e.g. Office365Users 404)
+
+Always dismiss via shared helper `tests/utils/host-dialogs.ts`
+(`dismissHostDialogs` / `dismissHostDialogsSettling`) after `goto`/`reload` and in
+`openDashboard` / `openInvoiceOverview` / `openCreateInvoice`. Do **not** click
+"Don't allow". These dialogs live on the **host page**, not only inside
+`fullscreen-app-host`.
+
+## Live MCP exploration (planner / generator)
+
+- Do NOT `browser_wait_for({ text: "Dashboard" })` — iframe text is invisible at top level.
+- After navigate: `browser_wait_for({ time: 10 })` then `browser_snapshot` (iframe refs `f1e*`).
+- Refs go stale on re-render — re-snapshot before clicking if "not found".

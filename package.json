@@ -1,0 +1,23 @@
+{
+  "name": "invoice-app-automation",
+  "version": "1.0.0",
+  "description": "Playwright E2E automation for the Synergy Invoice Canvas app",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test tests/smoke.spec.ts",
+    "test:dashboard": "playwright test tests/dashboard-screen.spec.ts --project=chromium-admin",
+    "test:create-invoice": "playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin",
+    "test:overview": "playwright test tests/invoice-overview-screen.spec.ts --project=chromium-admin",
+    "test:admin": "playwright test --project=chromium-admin",
+    "test:pm": "playwright test --project=chromium-pm",
+    "report": "playwright show-report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.0.1"
+  }
+}
