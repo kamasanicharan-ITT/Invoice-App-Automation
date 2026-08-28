@@ -13,6 +13,9 @@ alwaysApply: false
 - Primary key: `dia_invoicedetailsid`
 - Partners/projects/contracts differ per env — create seed data in that org, then discover
   via OData fixtures (`tests/utils/dataverse-fixtures.ts`). Never hardcode DEV GUIDs/names.
+- Capture the Dataverse token with the **active persona** storageState (`auth/<env>/admin.json`
+  or `pm.json`). Admin fixtures are org-wide. PM fixtures are only projects where that user is
+  Submitter, Reviewer, or Approver (Invoice Mail List).
 
 ## Key columns
 

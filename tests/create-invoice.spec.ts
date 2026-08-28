@@ -505,18 +505,19 @@ test.describe('Create Invoice Screen', () => {
     noActiveContract: null,
     noFourthMonthCoverage: null,
     multiActiveContract: null,
-    cursorTest: null,
+    coversFourthMonth: null,
     editableProduct: null,
     nonEditableProduct: null,
   };
 
-  test.beforeAll(async ({ browser }) => {
+  test.beforeAll(async ({ browser }, testInfo) => {
     test.setTimeout(180000);
-    dataverseToken = await captureDataverseToken(browser, APP_URL);
+    const persona = activePersona(testInfo);
+    dataverseToken = await captureDataverseToken(browser, APP_URL, persona);
     console.log('Token captured:', dataverseToken ? 'YES' : 'NO');
     if (dataverseToken) {
-      fixtures = await loadCreateInvoiceFixtures(dataverseToken);
-      logFixtures(fixtures);
+      fixtures = await loadCreateInvoiceFixtures(dataverseToken, { persona });
+      logFixtures(fixtures, persona);
     }
   });
 

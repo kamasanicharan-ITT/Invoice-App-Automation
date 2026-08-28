@@ -138,14 +138,17 @@ function workflowIdOf(run: FlowRunRow): string {
 
 export async function dvGet<T>(
   token: string,
-  pathAndQuery: string
+  pathAndQuery: string,
+  extraHeaders?: Record<string, string>
 ): Promise<{ ok: boolean; status: number; body: T | null; raw: string }> {
   const api = await request.newContext();
   try {
     const url = pathAndQuery.startsWith('http')
       ? pathAndQuery
       : `${DATAVERSE_URL}/api/data/v9.2/${pathAndQuery}`;
-    const res = await api.get(url, { headers: ODATA_HEADERS(token) });
+    const res = await api.get(url, {
+      headers: { ...ODATA_HEADERS(token), ...extraHeaders },
+    });
     const raw = await res.text();
     let body: T | null = null;
     try {
@@ -159,25 +162,72 @@ export async function dvGet<T>(
   }
 }
 
+/**
+ * List modern (cloud) flows. Dataverse `$top` is treated as a hard cap *without*
+ * `@odata.nextLink` on this org — a `$top=200` page ended at names starting with S
+ * and dropped **Update Invoice - NA/Other Region**. Page via `odata.maxpagesize`
+ * and follow nextLink until exhausted.
+ */
 export async function listCloudFlows(token: string): Promise<{
   ok: boolean;
   status: number;
   flows: WorkflowRow[];
   errorSnippet: string;
 }> {
-  const select =
-    'workflowid,name,uniquename,statecode,category';
+  const select = 'workflowid,name,uniquename,statecode,category';
   const filter = encodeURIComponent(`category eq ${WORKFLOW_CATEGORY_MODERN_FLOW}`);
+  return listWorkflowsPages(
+    token,
+    `workflows?$select=${select}&$filter=${filter}&$orderby=name asc`
+  );
+}
+
+/** Name search across cloud flows (and, if empty, any workflow category). */
+export async function searchWorkflowsByName(
+  token: string,
+  nameContains: string
+): Promise<{
+  ok: boolean;
+  status: number;
+  flows: WorkflowRow[];
+  errorSnippet: string;
+}> {
+  const needle = nameContains.replace(/'/g, "''");
+  const select = 'workflowid,name,uniquename,statecode,category';
+  const cloud = encodeURIComponent(
+    `category eq ${WORKFLOW_CATEGORY_MODERN_FLOW} and contains(name,'${needle}')`
+  );
+  const anyCat = encodeURIComponent(`contains(name,'${needle}')`);
+  const first = await listWorkflowsPages(
+    token,
+    `workflows?$select=${select}&$filter=${cloud}&$orderby=name asc`
+  );
+  if (!first.ok || first.flows.length > 0) return first;
+  return listWorkflowsPages(
+    token,
+    `workflows?$select=${select}&$filter=${anyCat}&$orderby=name asc`
+  );
+}
+
+async function listWorkflowsPages(
+  token: string,
+  firstPathAndQuery: string
+): Promise<{
+  ok: boolean;
+  status: number;
+  flows: WorkflowRow[];
+  errorSnippet: string;
+}> {
   const flows: WorkflowRow[] = [];
-  let next: string | undefined =
-    `workflows?$select=${select}&$filter=${filter}&$orderby=name asc&$top=200`;
+  let next: string | undefined = firstPathAndQuery;
   let lastStatus = 0;
   let lastRaw = '';
 
   while (next) {
     const result = await dvGet<{ value?: WorkflowRow[]; '@odata.nextLink'?: string }>(
       token,
-      next
+      next,
+      { Prefer: 'odata.include-annotations="*",odata.maxpagesize=500' }
     );
     lastStatus = result.status;
     lastRaw = result.raw;
@@ -186,7 +236,7 @@ export async function listCloudFlows(token: string): Promise<{
     }
     flows.push(...(result.body?.value ?? []));
     next = result.body?.['@odata.nextLink'] || undefined;
-    if (flows.length >= 500) break;
+    if (flows.length >= 2000) break;
   }
 
   return { ok: true, status: lastStatus, flows, errorSnippet: '' };
@@ -298,12 +348,21 @@ export async function listFlowRunsForWorkflow(
   );
 }
 
+/** Retired copies must never be treated as the live Create/Update parent. */
+export function isRetiredInvoiceFlowName(name: string): boolean {
+  return /deprecated|\(copy\s*\)|^copy(\s+of)?\b|\bold\b|\bbackup\b|\blegacy\b/i.test(name.trim());
+}
+
+function liveFlows(flows: WorkflowRow[]): WorkflowRow[] {
+  return flows.filter((f) => !isRetiredInvoiceFlowName(f.name ?? ''));
+}
+
 export function findExpectedCreateInvoiceFlows(
   flows: WorkflowRow[],
   regionKind: 'north-america' | 'other' | 'unknown'
 ): WorkflowRow[] {
   const pattern = expectedCreateInvoiceFlowPattern(regionKind);
-  return flows.filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
+  return liveFlows(flows).filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
 }
 
 export function findExpectedUpdateInvoiceFlows(
@@ -311,10 +370,10 @@ export function findExpectedUpdateInvoiceFlows(
   regionKind: 'north-america' | 'other' | 'unknown'
 ): WorkflowRow[] {
   const pattern = expectedUpdateInvoiceFlowPattern(regionKind);
-  return flows.filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
+  return liveFlows(flows).filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
 }
 
-/** The four parent flows that own Create Invoice Submit / Edit-resubmit. */
+/** The four live parent flows that own Create Invoice Submit / Edit-resubmit. */
 export type MainInvoiceFlowKey = 'create-na' | 'create-other' | 'update-na' | 'update-other';
 
 export const MAIN_INVOICE_FLOW_LABELS: Record<MainInvoiceFlowKey, string> = {
@@ -324,32 +383,42 @@ export const MAIN_INVOICE_FLOW_LABELS: Record<MainInvoiceFlowKey, string> = {
   'update-other': 'Update Invoice - Other Region',
 };
 
-function preferOnFlow(matches: WorkflowRow[]): WorkflowRow | undefined {
-  return matches.find((f) => f.statecode === 1) ?? matches[0];
+function preferLiveOnFlow(matches: WorkflowRow[], exactLabel: string): WorkflowRow | undefined {
+  const on = matches.filter((f) => f.statecode === 1);
+  const exact = on.find((f) => (f.name ?? '').trim().toLowerCase() === exactLabel.toLowerCase());
+  return exact ?? on[0];
 }
 
 /**
- * Resolve the four Create/Update × NA/Other catalog rows from the modern-flow list.
- * Name matching is conservative so "Update Invoice - NA" never counts as Create.
+ * Resolve the four live Create/Update × NA/Other catalog rows.
+ * Deprecated / Old / Copy / Backup names are ignored. Off rows are not used as a fallback.
  */
 export function pickMainInvoiceFlows(flows: WorkflowRow[]): Record<
   MainInvoiceFlowKey,
   WorkflowRow | undefined
 > {
-  const named = (test: (name: string) => boolean) =>
-    preferOnFlow(flows.filter((f) => test(f.name ?? '')));
+  const catalog = liveFlows(flows);
+  const named = (exactLabel: string, test: (name: string) => boolean) =>
+    preferLiveOnFlow(
+      catalog.filter((f) => test(f.name ?? '')),
+      exactLabel
+    );
 
   return {
     'create-na': named(
+      MAIN_INVOICE_FLOW_LABELS['create-na'],
       (n) => /create\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/update/i.test(n)
     ),
     'create-other': named(
+      MAIN_INVOICE_FLOW_LABELS['create-other'],
       (n) => /create\s*invoice/i.test(n) && /other/i.test(n) && !/update/i.test(n)
     ),
     'update-na': named(
+      MAIN_INVOICE_FLOW_LABELS['update-na'],
       (n) => /update\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/create/i.test(n)
     ),
     'update-other': named(
+      MAIN_INVOICE_FLOW_LABELS['update-other'],
       (n) => /update\s*invoice/i.test(n) && /other/i.test(n) && !/create/i.test(n)
     ),
   };

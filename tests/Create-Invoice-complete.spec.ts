@@ -23,9 +23,6 @@ import {
   calendarMonthUsDates,
   threeMonthCapUsDates,
   fourthMonthStartUsDate,
-  CURSOR_TEST,
-  UNIMIND_FOUR_MONTHS,
-  PM_UNIMIND_PROJECTS,
   acceptContractIfPrompted,
   replaceComboSelectionWithJunk,
   formatUsDate,
@@ -46,11 +43,11 @@ import {
   selectPartner,
   selectPartnerAndProject,
   selectProjectAllowingToast,
-  dismissDuplicateDialog,
   duplicateLocators,
   awaitSubmitNavigatedToOverview,
   partnerComboHasOptions,
   fillValidLine,
+  anyProject,
 } from './utils/create-invoice-ui';
 import {
   assertSubmitFlowEvidence,
@@ -72,17 +69,18 @@ test.describe('Create Invoice regression', () => {
     noActiveContract: null,
     noFourthMonthCoverage: null,
     multiActiveContract: null,
-    cursorTest: null,
+    coversFourthMonth: null,
     editableProduct: null,
     nonEditableProduct: null,
   };
 
-  test.beforeAll(async ({ browser }) => {
+  test.beforeAll(async ({ browser }, testInfo) => {
     test.setTimeout(180000);
-    dataverseToken = await captureDataverseToken(browser, APP_URL);
+    const persona = activePersona(testInfo);
+    dataverseToken = await captureDataverseToken(browser, APP_URL, persona);
     if (dataverseToken) {
-      fixtures = await loadCreateInvoiceFixtures(dataverseToken);
-      logFixtures(fixtures);
+      fixtures = await loadCreateInvoiceFixtures(dataverseToken, { persona });
+      logFixtures(fixtures, persona);
     }
   });
 
@@ -102,7 +100,7 @@ test.describe('Create Invoice regression', () => {
       fixtures.eligibleNonAdhoc,
       fixtures.northAmerica,
       fixtures.nonNorthAmerica,
-      fixtures.cursorTest,
+      fixtures.coversFourthMonth,
       fixtures.duplicateNonAdhoc,
       fixtures.noLastMonthInvoice,
       fixtures.withLastInvoice,
@@ -110,6 +108,21 @@ test.describe('Create Invoice regression', () => {
       fixtures.noActiveContract,
     ];
     return list.find((p) => p?.projectName === name) ?? null;
+  }
+
+  function selectableProject() {
+    return anyProject(
+      fixtures.eligibleNonAdhoc,
+      fixtures.coversFourthMonth,
+      fixtures.northAmerica,
+      fixtures.nonNorthAmerica,
+      fixtures.withLastInvoice,
+      fixtures.multiActiveContract
+    );
+  }
+
+  function fourthMonthProject() {
+    return fixtures.coversFourthMonth;
   }
 
   // ── 1. Page load and defaults ─────────────────────────────────────────────
@@ -346,13 +359,15 @@ test.describe('Create Invoice regression', () => {
     }, testInfo) => {
       test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc toggle is hidden — Admin-only');
       test.skip(!fixtures.editableProduct, 'No editable product');
+      const project = fourthMonthProject();
+      test.skip(!project, 'No in-scope project whose contract covers the 4th month');
       const appFrame = await openCreateInvoice(page, 'admin');
       const future = fourthMonthStartUsDate();
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       await setAdhoc(appFrame, true);
-      const outcome = await selectPartnerAndProject(appFrame, CURSOR_TEST);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / Cursor Test');
+      const outcome = await selectPartnerAndProject(appFrame, project!);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on 4th-month fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await fillDateField(page, appFrame, 0, future);
@@ -529,14 +544,14 @@ test.describe('Create Invoice regression', () => {
 
     test('CI-010 Contract picker lists only Active contracts', async ({ page }, testInfo) => {
       test.skip(!dataverseToken, 'No Dataverse token');
-      const project = fixtures.multiActiveContract ?? fixtures.cursorTest;
-      test.skip(!project?.projectId, 'No Cursor Test / multi-contract project in Dataverse');
+      const project = fixtures.multiActiveContract;
+      test.skip(!project?.projectId, 'No in-scope project with 2+ Active covering contracts');
       const contracts = await listContractsForProject(dataverseToken, project!.projectId);
       const active = contracts.filter((c) => c.statecode === 0);
       const inactive = contracts.filter((c) => c.statecode !== 0);
       test.skip(
         active.length < 2,
-        'Need 2+ Active contracts on this project (seed Cursor Test, then discover from Dataverse)'
+        'Need 2+ Active contracts on this in-scope project'
       );
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
@@ -574,18 +589,15 @@ test.describe('Create Invoice regression', () => {
     test('CI-014 Multiple Active contracts require the user to pick one', async ({
       page,
     }, testInfo) => {
-      const project = fixtures.multiActiveContract ?? fixtures.cursorTest;
-      test.skip(
-        !project,
-        'Need 2+ Active covering contracts (seed Cursor Test, then discover from Dataverse)'
-      );
+      const project = fixtures.multiActiveContract;
+      test.skip(!project, 'Need 2+ Active covering contracts in this persona scope');
       if (dataverseToken && project?.projectId) {
         const covering = (await listActiveContractsForProject(dataverseToken, project.projectId)).filter(
           (c) => c.coversInvoiceDate
         );
         test.skip(
           covering.length < 2,
-          'Need 2+ Active contracts covering this invoice month on Cursor Test'
+          'Need 2+ Active contracts covering this invoice month'
         );
       }
       test.skip(!fixtures.editableProduct, 'No editable product');
@@ -620,16 +632,18 @@ test.describe('Create Invoice regression', () => {
     }, testInfo) => {
       test.skip(!fixtures.editableProduct, 'No editable product');
       const persona = activePersona(testInfo);
+      const project = fourthMonthProject();
+      test.skip(!project, 'No in-scope project whose contract covers the 4th month');
       const appFrame = await openCreateInvoice(page, persona);
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
       const dates = calendarMonthUsDates();
       const future = fourthMonthStartUsDate();
 
-      // Non-adhoc: Invoice Date in the 4th month while Demo contract still covers it → both off.
+      // Non-adhoc: Invoice Date in the 4th month while the covering contract still applies → both off.
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       if (persona === 'admin') await setAdhoc(appFrame, false);
-      const outcome = await selectPartnerAndProject(appFrame, CURSOR_TEST);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / Cursor Test');
+      const outcome = await selectPartnerAndProject(appFrame, project!);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on 4th-month fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(dateBox(appFrame, 1)).toHaveValue(dates.start);
@@ -659,6 +673,8 @@ test.describe('Create Invoice regression', () => {
     }, testInfo) => {
       test.skip(!fixtures.editableProduct, 'No editable product');
       const persona = activePersona(testInfo);
+      const project = fourthMonthProject();
+      test.skip(!project, 'No in-scope project whose contract covers the 4th month');
       const appFrame = await openCreateInvoice(page, persona);
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
       const future = fourthMonthStartUsDate();
@@ -666,8 +682,8 @@ test.describe('Create Invoice regression', () => {
       // Service End in the 4th month: Invoice Date follows; both buttons stay off.
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       if (persona === 'admin') await setAdhoc(appFrame, false);
-      const outcome = await selectPartnerAndProject(appFrame, CURSOR_TEST);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / Cursor Test');
+      const outcome = await selectPartnerAndProject(appFrame, project!);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on 4th-month fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await fillDateField(page, appFrame, 2, future);
@@ -780,26 +796,18 @@ test.describe('Create Invoice regression', () => {
       test.skip(activePersona(testInfo) === 'admin', 'Sheet CI-006 is the PM non-adhoc cap');
       test.skip(
         true,
-        'Parked with future-date bugs: Unimind / Test for PM still allows Submit at 11/1/2026'
+        'Parked with future-date bugs: PM non-adhoc Submit still allows 11/1/2026'
       );
       test.skip(!fixtures.editableProduct, 'No editable product');
+      const used = selectableProject();
+      test.skip(!used, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, 'pm');
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
       const cap = threeMonthCapUsDates();
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      let used: (typeof PM_UNIMIND_PROJECTS)[number] | null = null;
-      for (const seed of [...PM_UNIMIND_PROJECTS, fixtures.eligibleNonAdhoc].filter(Boolean)) {
-        const outcome = await selectPartnerAndProject(appFrame, seed!).catch(() => 'missing' as const);
-        if (outcome === 'duplicate') {
-          await dismissDuplicateDialog(appFrame);
-          continue;
-        }
-        if (outcome === 'missing') continue;
-        used = seed!;
-        break;
-      }
-      test.skip(!used, 'No selectable PM project (all duplicate or missing)');
+      const outcome = await selectPartnerAndProject(appFrame, used);
+      test.skip(outcome === 'duplicate', 'Eligible in-scope project showed Duplicate Project!');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await fillDateField(page, appFrame, 0, cap.lastAllowed);
@@ -979,12 +987,14 @@ test.describe('Create Invoice regression', () => {
       page,
     }, testInfo) => {
       test.skip(!fixtures.editableProduct, 'No editable product');
+      const project = selectableProject();
+      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, UNIMIND_FOUR_MONTHS);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / 4 months');
+      const outcome = await selectPartnerAndProject(appFrame, project);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
@@ -995,7 +1005,7 @@ test.describe('Create Invoice regression', () => {
       await replaceComboSelectionWithJunk(
         page,
         appFrame,
-        selectedPartnerButton(appFrame, 'Unimind')
+        selectedPartnerButton(appFrame, project.partnerName)
       );
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
       await expect(appFrame.getByRole('button', { name: 'Save Draft' })).toBeDisabled();
@@ -1018,12 +1028,14 @@ test.describe('Create Invoice regression', () => {
     }, testInfo) => {
       test.skip(!fixtures.editableProduct, 'No editable product');
       const productName = fixtures.editableProduct!.name;
+      const project = selectableProject();
+      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, UNIMIND_FOUR_MONTHS);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / 4 months');
+      const outcome = await selectPartnerAndProject(appFrame, project);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, productName);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
@@ -1035,7 +1047,7 @@ test.describe('Create Invoice regression', () => {
       await replaceComboSelectionWithJunk(
         page,
         appFrame,
-        selectedProjectButton(appFrame, '4 months')
+        selectedProjectButton(appFrame, project.projectName)
       );
       await fillValidLine(page, appFrame, productName);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
@@ -1059,12 +1071,14 @@ test.describe('Create Invoice regression', () => {
     }, testInfo) => {
       test.skip(!fixtures.editableProduct, 'No editable product');
       const productName = fixtures.editableProduct!.name;
+      const project = selectableProject();
+      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, UNIMIND_FOUR_MONTHS);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / 4 months');
+      const outcome = await selectPartnerAndProject(appFrame, project);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, productName);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
@@ -1288,10 +1302,12 @@ test.describe('Create Invoice regression', () => {
     });
 
     test('CI-033 Discount line item shows a negative total', async ({ page }, testInfo) => {
+      const project = selectableProject();
+      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, CURSOR_TEST);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / Cursor Test');
+      const outcome = await selectPartnerAndProject(appFrame, project);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
       await acceptContractIfPrompted(appFrame);
       await selectProduct(appFrame, /^Discount$/);
       await fillLineItem(page, appFrame, { description: 'discount line', qty: '1', rate: '45' });
@@ -1521,13 +1537,15 @@ test.describe('Create Invoice regression', () => {
     }, testInfo) => {
       test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc toggle is hidden — Admin-only');
       test.skip(!fixtures.editableProduct, 'No editable product');
+      const project = fourthMonthProject();
+      test.skip(!project, 'No in-scope project whose contract covers the 4th month');
       const appFrame = await openCreateInvoice(page, 'admin');
       const future = fourthMonthStartUsDate();
 
-      // Adhoc ON: 4th-month Invoice Date still covered by Demo contract → Save Draft stays on.
+      // Adhoc ON: 4th-month Invoice Date still covered by contract → Save Draft stays on.
       await setAdhoc(appFrame, true);
-      const outcome = await selectPartnerAndProject(appFrame, CURSOR_TEST);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on Unimind / Cursor Test');
+      const outcome = await selectPartnerAndProject(appFrame, project);
+      test.skip(outcome === 'duplicate', 'Duplicate Project! on 4th-month fixture');
       await acceptContractIfPrompted(appFrame);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await fillDateField(page, appFrame, 0, future);
