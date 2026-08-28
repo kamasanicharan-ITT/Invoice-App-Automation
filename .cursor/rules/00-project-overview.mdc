@@ -28,7 +28,7 @@ The **Synergy** program has two interconnected Power Apps sharing one Dataverse 
 
 | Env | Purpose | Auth path |
 |-----|---------|-----------|
-| DEV | Primary authoring / debug (default) | `auth/dev/*.json` or legacy `auth/*.json` |
+| DEV | Primary authoring / debug (default) | `auth/dev/*.json` |
 | SIT | System integration | `auth/sit/*.json` |
 | QA  | Quality assurance | `auth/qa/*.json` |
 | UAT | User acceptance | `auth/uat/*.json` |
