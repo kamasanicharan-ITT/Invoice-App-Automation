@@ -6,9 +6,8 @@ import { env } from './config/env';
  *   ENV=dev|sit|qa|uat (default dev; prod forbidden — see config/env.ts)
  *   admin — your account (BDU + Security Roles admin) → auth/<env>/admin.json
  *   pm    — teammate (Basic User 2.0)                → auth/<env>/pm.json
- *   DEV also accepts legacy auth/admin.json + auth/pm.json
  *
- * Capture (example SIT):
+ * Capture (example SIT — files go directly under auth/sit, not a nested auth folder):
  *   mkdir auth\sit
  *   npx playwright open --save-storage=auth/sit/admin.json "<SIT_APP_URL>"
  *   npx playwright open --save-storage=auth/sit/pm.json "<SIT_APP_URL>"
