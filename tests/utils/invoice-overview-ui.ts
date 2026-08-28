@@ -108,6 +108,14 @@ export function pageNumberButtons(appFrame: FrameLocator) {
   return appFrame.getByRole('button', { name: /^\d+$/ });
 }
 
+export async function clickPaginationPrev(page: Page, appFrame: FrameLocator): Promise<void> {
+  const lowest = pageNumberButtons(appFrame).first();
+  await expect(lowest).toBeVisible({ timeout: 15000 });
+  const box = await lowest.boundingBox();
+  if (!box) throw new Error('Pagination page button has no bounding box');
+  await page.mouse.click(box.x - 20, box.y + box.height / 2);
+}
+
 export function scopeRadios(appFrame: FrameLocator) {
   return {
     group: appFrame.getByRole('radiogroup'),

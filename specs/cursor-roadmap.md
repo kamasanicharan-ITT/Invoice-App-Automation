@@ -1,7 +1,7 @@
 # Cursor Automation Roadmap (later phases)
 
 Multi-env scaffolding (`config/env.ts`, per-env auth, prod guard) is in progress under
-Phase 2 — see `phase2.md`. Items below remain for later.
+Phase 2 — see `specs/phase2.md`. Items below remain for later.
 
 ## 1. Complete multi-environment proof (Phase 2)
 

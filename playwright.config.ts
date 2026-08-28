@@ -23,14 +23,6 @@ export default defineConfig({
   retries: 1,
   fullyParallel: false,
 
-  // Exploration / discovery specs — run explicitly if needed, not in default regression.
-  testIgnore: [
-    '**/dataverse-explorer.spec.ts',
-    '**/dataverse-schema.spec.ts',
-    '**/dataverse-schema-export.spec.ts',
-    '**/flow-tracking.spec.ts',
-  ],
-
   reporter: [['list'], ['html', { open: 'never' }]],
 
   use: {

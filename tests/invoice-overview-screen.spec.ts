@@ -1,189 +1,81 @@
-// spec: specs/invoice-overview-test-plan.md
+// spec: specs/invoice-overview-screen-plan.md
 // seed: tests/seed.spec.ts
 //
-// Invoice Overview suite — Admin (you) vs PM (teammate).
-// Same shell for both; My Invoices / All Invoices radios are Admin-only.
-// TC-IO-20 / TC-IO-27: Review overlay (View Invoice) and header refresh — do not Flag / Mark as Reviewed.
-// Persona is inferred from Playwright project name (same pattern as dashboard.spec.ts).
-// URLs/auth come from config/env.ts (ENV=dev|sit|qa|uat).
+// Single Invoice Overview screen suite: TC-IO shell, unique Excel IO cases,
+// and a read-only Overview flow catalog. Mutating lifecycle cases stay skipped
+// until product behaviour is confirmed.
 
-import { test, expect, type Page, type FrameLocator, type Locator, type TestInfo } from '@playwright/test';
-import { APP_URL } from '../config/env';
+import { test, expect } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
-import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
+import { dismissHostDialogs } from './utils/host-dialogs';
+import { captureDataverseToken } from './utils/dataverse-fixtures';
+import {
+  isRetiredInvoiceFlowName,
+  listCloudFlows,
+  listFlowRunsForWorkflow,
+  searchWorkflowsByName,
+  type FlowRunRow,
+  type WorkflowRow,
+} from './utils/flow-runs';
+import {
+  PERIOD_OPTIONS,
+  REGIONS,
+  activePersona,
+  applyPeriod,
+  clickIconRightOf,
+  clickPaginationPrev,
+  expectComboOptions,
+  firstInvoiceNumber,
+  firstRowPartnerAndProject,
+  openInvoiceOverview,
+  overviewHasRows,
+  pageNumberButtons,
+  periodButton,
+  regionDropdown,
+  scopeRadios,
+  waitForOverviewSettled,
+} from './utils/invoice-overview-ui';
 
-const PERIOD_OPTIONS = [
-  'This Month',
-  'Last Month',
-  'Quater to Date',
-  'Last Quater',
-  'Year to Date',
-  'Last Year',
-  'Future Months',
-] as const;
+const OVERVIEW_FLOWS: { key: string; label: string; match: (name: string) => boolean }[] = [
+  {
+    key: 'notify-initiator',
+    label: 'NotifyInvoiceInitiator',
+    match: (n) => /notify\s*invoice\s*initiator/i.test(n),
+  },
+  {
+    key: 'post-submitted',
+    label: 'Project Invoice (M): Handle Post Submitted Tasks',
+    match: (n) => /handle\s*post\s*submitted/i.test(n),
+  },
+  {
+    key: 'update-na',
+    label: 'Update Invoice - NA Region',
+    match: (n) =>
+      /update\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/create|deprecated/i.test(n),
+  },
+  {
+    key: 'update-other',
+    label: 'Update Invoice - Other Region',
+    match: (n) => /update\s*invoice/i.test(n) && /other/i.test(n) && !/create|deprecated/i.test(n),
+  },
+  {
+    key: 'immediate-send-notify',
+    label: 'Notify for Immediate send Invoices',
+    match: (n) => /immediate\s*send/i.test(n),
+  },
+  {
+    key: 'send-instant-client',
+    label: 'Send instant Invoices to Client',
+    match: (n) => /send\s*instant\s*invoices\s*to\s*client/i.test(n),
+  },
+];
 
-const REGIONS = [
-  'Australia',
-  'Colombia',
-  'India',
-  'Netherlands',
-  'North America',
-  'Saudi Arabia',
-  'South Korea',
-  'UAE',
-] as const;
-
-const INVOICE_NUMBER = /\d{4}-\d{4}|INV-\d+/;
-
-async function clickIconRightOf(page: Page, label: Locator): Promise<void> {
-  await expect(label).toBeVisible();
-  const box = await label.boundingBox();
-  if (!box) throw new Error(`No bounding box for ${await label.textContent()}`);
-  await page.mouse.click(box.x + box.width + 18, box.y + box.height / 2);
-}
-
-type Persona = 'admin' | 'pm';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Persona helpers (mirror dashboard.spec.ts)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function personaFromProjectName(projectName: string): Persona {
-  return projectName.toLowerCase().includes('pm') ? 'pm' : 'admin';
-}
-
-function activePersona(testInfo: TestInfo): Persona {
-  return personaFromProjectName(testInfo.project.name);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UI helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function openInvoiceOverview(page: Page): Promise<FrameLocator> {
-  await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
-  const appFrame = page.frameLocator('iframe[name="fullscreen-app-host"]');
-
-  await dismissHostDialogsSettling(page);
-
-  try {
-    await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
-      timeout: 60000,
-    });
-  } catch {
-    await dismissHostDialogs(page);
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await dismissHostDialogsSettling(page);
-    await expect(appFrame.getByText('Dashboard', { exact: true }).first()).toBeVisible({
-      timeout: 90000,
-    });
-  }
-
-  await dismissHostDialogs(page);
-  await appFrame.getByRole('button', { name: 'Invoice Overview' }).first().click();
-  await dismissHostDialogs(page);
-  await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
-    timeout: 30000,
-  });
-
-  await expect
-    .poll(
-      async () => {
-        const invoiceCount = await appFrame.getByText(INVOICE_NUMBER).count();
-        const itemCount = await appFrame.getByText(/^Item\s*\d+/).count();
-        if (invoiceCount > 0 || itemCount > 0) return 'rows';
-        const emptyVisible = await appFrame
-          .getByText('No Item to Display', { exact: true })
-          .isVisible()
-          .catch(() => false);
-        return emptyVisible ? 'empty' : '';
-      },
-      { timeout: 45000 }
-    )
-    .not.toBe('');
-
-  return appFrame;
-}
-
-/** Unselected Region combo — accessible name is exactly "." (unique on Overview). */
-function regionDropdown(appFrame: FrameLocator) {
-  return appFrame.getByRole('button', { name: '.', exact: true });
-}
-
-function periodButton(appFrame: FrameLocator, label: string) {
-  return appFrame.getByRole('button', { name: label });
-}
-
-function pageNumberButtons(appFrame: FrameLocator) {
-  return appFrame.getByRole('button', { name: /^\d+$/ });
-}
-
-function scopeRadios(appFrame: FrameLocator) {
-  return {
-    group: appFrame.getByRole('radiogroup'),
-    my: appFrame.getByRole('radio', { name: 'My Invoices' }),
-    all: appFrame.getByRole('radio', { name: 'All Invoices' }),
-  };
-}
-
-async function clickPaginationPrev(page: Page, appFrame: FrameLocator): Promise<void> {
-  const lowest = pageNumberButtons(appFrame).first();
-  await expect(lowest).toBeVisible({ timeout: 15000 });
-  const box = await lowest.boundingBox();
-  if (!box) throw new Error('Pagination page button has no bounding box');
-  await page.mouse.click(box.x - 20, box.y + box.height / 2);
-}
-
-async function expectComboOptions(
-  appFrame: FrameLocator,
-  options: readonly string[]
-): Promise<void> {
-  await expect(appFrame.getByRole('option').first()).toBeVisible({ timeout: 15000 });
-  await expect(appFrame.getByRole('option')).toHaveCount(options.length);
-  for (const name of options) {
-    const opt = appFrame.getByRole('option', { name, exact: true });
-    await opt.scrollIntoViewIfNeeded().catch(() => undefined);
-    await expect.soft(opt).toBeVisible({ timeout: 10000 });
-  }
-}
-
-async function waitForOverviewSettled(appFrame: FrameLocator): Promise<void> {
-  await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
-    timeout: 15000,
-  });
-  await expect
-    .poll(
-      async () => {
-        const invoiceCount = await appFrame.getByText(INVOICE_NUMBER).count();
-        const itemCount = await appFrame.getByText(/^Item\s*\d+/).count();
-        if (invoiceCount > 0 || itemCount > 0) return 'rows';
-        const emptyVisible = await appFrame
-          .getByText('No Item to Display', { exact: true })
-          .isVisible()
-          .catch(() => false);
-        return emptyVisible ? 'empty' : '';
-      },
-      { timeout: 30000 }
-    )
-    .not.toBe('');
-}
-
-async function firstInvoiceNumber(appFrame: FrameLocator): Promise<string> {
-  const cell = appFrame.getByText(INVOICE_NUMBER).first();
-  if ((await cell.count()) === 0) return '';
-  return ((await cell.textContent()) || '').trim();
-}
-
-async function overviewHasRows(appFrame: FrameLocator): Promise<boolean> {
+function flowRunLine(r: FlowRunRow): string {
   return (
-    (await appFrame.getByText(INVOICE_NUMBER).count()) > 0 ||
-    (await appFrame.getByText(/^Item\s*\d+/).count()) > 0
+    `| ${r.starttime ?? r.createdon ?? '?'} | ${r.status ?? '?'} | ${r.flowrunid ?? r.name ?? '?'} | ` +
+    `${(r.errormessage ?? '').replace(/\|/g, '/').slice(0, 80)} |`
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite
-// ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Invoice Overview Screen', () => {
   test.describe.configure({ timeout: 120000 });
@@ -662,5 +554,237 @@ test.describe('Invoice Overview Screen', () => {
         testInfo
       );
     });
+  });
+
+  test.describe('Period, region, and search (sheet IDs not covered above)', () => {
+    test('IO-004: Quarter to Date option can be applied', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await applyPeriod(appFrame, 'Quater to Date');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true }), periodButton(appFrame, 'Quater to Date')],
+        'Quater to Date',
+        testInfo
+      );
+    });
+
+    test('IO-005: Last Quarter option can be applied', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await applyPeriod(appFrame, 'Last Quater');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true }), periodButton(appFrame, 'Last Quater')],
+        'Last Quater',
+        testInfo
+      );
+    });
+
+    test('IO-006: Year to Date option can be applied', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await applyPeriod(appFrame, 'Year to Date');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true }), periodButton(appFrame, 'Year to Date')],
+        'Year to Date',
+        testInfo
+      );
+    });
+
+    test('IO-007: Last Year option can be applied', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await applyPeriod(appFrame, 'Last Year');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true }), periodButton(appFrame, 'Last Year')],
+        'Last Year',
+        testInfo
+      );
+    });
+
+    test('IO-008: Future Months option can be applied', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await applyPeriod(appFrame, 'Future Months');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true }), periodButton(appFrame, 'Future Months')],
+        'Future Months',
+        testInfo
+      );
+    });
+
+    test('IO-010: Region filter North America', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await dismissHostDialogs(page);
+      await regionDropdown(appFrame).click();
+      await expect(
+        appFrame.getByRole('option', { name: 'North America', exact: true })
+      ).toBeVisible({ timeout: 15000 });
+      await appFrame.getByRole('option', { name: 'North America', exact: true }).click();
+      await expect(appFrame.getByRole('button', { name: 'North America' })).toBeVisible({
+        timeout: 15000,
+      });
+      await waitForOverviewSettled(appFrame);
+      await markGroupAndShot(
+        page,
+        [
+          appFrame.getByText('Region', { exact: true }),
+          appFrame.getByRole('button', { name: 'North America' }),
+        ],
+        'North America region',
+        testInfo
+      );
+    });
+
+    test('IO-011: Region filter blank shows all regions', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await expect(regionDropdown(appFrame)).toBeVisible();
+      await waitForOverviewSettled(appFrame);
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Region', { exact: true }), regionDropdown(appFrame)],
+        'Region unselected',
+        testInfo
+      );
+    });
+
+    test('IO-013: Search by partner name', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      test.skip(!(await overviewHasRows(appFrame)), 'No gallery rows to search');
+      const { partner } = await firstRowPartnerAndProject(appFrame);
+      test.skip(!partner, 'Could not read a partner name from the first row');
+      const search = appFrame.getByPlaceholder('Search');
+      await search.fill(partner);
+      await expect(search).toHaveValue(partner);
+      await expect(appFrame.getByText(partner).first()).toBeVisible({ timeout: 15000 });
+    });
+
+    test('IO-014: Search by project name', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      test.skip(!(await overviewHasRows(appFrame)), 'No gallery rows to search');
+      const { project } = await firstRowPartnerAndProject(appFrame);
+      test.skip(!project, 'Could not read a project name from the first row');
+      const search = appFrame.getByPlaceholder('Search');
+      await search.fill(project);
+      await expect(search).toHaveValue(project);
+      await expect(appFrame.getByText(project).first()).toBeVisible({ timeout: 15000 });
+    });
+  });
+
+  test.describe('Deferred Excel cases (pending product confirmation)', () => {
+    const pending = 'Deferred until product behaviour is confirmed';
+    test('IO-009: Future month invoice does not appear in This Month', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-016: Partner column sorts ascending then descending', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-017: Project column sorts correctly', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-018: Invoice # column sorts correctly', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-019: Status column sorts correctly', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-020: Partner column filter works', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-021: Status column filter works', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-022: Action Pending With filter works', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-029: PDF viewer shows navigation and zoom controls', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-030: Download button in PDF viewer saves the PDF', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-032b: Three-dot menu shows Delete Draft for Draft invoices', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-033: Delete Draft shows confirmation popup', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-034: Confirming Delete Draft removes the invoice', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-035: Cancel option available for Approved invoices', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-036: Cancelling invoice changes status to Cancelled', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-038: Approver can approve a Reviewed invoice', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-039: Reviewer can flag a Submitted invoice', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-040: Approver can flag a Reviewed invoice', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-041: Invoice amounts display correct decimal values', async () => {
+      test.skip(true, pending);
+    });
+    test('IO-042: Alphabetical order of column filter values', async () => {
+      test.skip(true, pending);
+    });
+  });
+
+  test('TC-IO-FLOW-01: Catalog Overview lifecycle flows and latest runs', async (
+    { browser },
+    testInfo
+  ) => {
+    test.skip(testInfo.project.name.toLowerCase().includes('pm'), 'Admin token — org-wide catalog');
+    const token = await captureDataverseToken(browser);
+    expect(token, 'Dataverse Bearer token from Admin storageState').toBeTruthy();
+
+    const inventory = await listCloudFlows(token);
+    expect(inventory.ok, inventory.errorSnippet).toBeTruthy();
+    const byUpdateName = await searchWorkflowsByName(token, 'Update Invoice');
+    const byImmediateName = await searchWorkflowsByName(token, 'Immediate send');
+    const mergedById = new Map<string, WorkflowRow>();
+    for (const f of [...inventory.flows, ...byUpdateName.flows, ...byImmediateName.flows]) {
+      const id = (f.workflowid ?? '').replace(/[{}]/g, '').toLowerCase();
+      if (id) mergedById.set(id, f);
+    }
+    const live = [...mergedById.values()].filter((f) => !isRetiredInvoiceFlowName(f.name ?? ''));
+    const lines: string[] = ['# Overview lifecycle flow catalog', ''];
+
+    for (const target of OVERVIEW_FLOWS) {
+      const matches = live.filter((f) => target.match(f.name ?? ''));
+      const on = matches.filter((f) => f.statecode === 1);
+      const preferred =
+        on.find((f) => (f.name ?? '').trim().toLowerCase() === target.label.toLowerCase()) ??
+        on[0] ??
+        matches[0];
+      lines.push(`### ${target.label}`);
+      lines.push(`- Catalog hits: **${matches.length}**`);
+      if (preferred?.workflowid) {
+        const runs = await listFlowRunsForWorkflow(token, preferred.workflowid, { top: 8 });
+        if (runs.ok && runs.runs.length) {
+          lines.push('| Start | Status | Run id | Error |');
+          lines.push('|---|---|---|---|');
+          lines.push(...runs.runs.map(flowRunLine));
+        }
+      }
+      lines.push('');
+    }
+
+    await testInfo.attach('overview-flow-catalog.md', {
+      body: Buffer.from(lines.join('\n'), 'utf-8'),
+      contentType: 'text/markdown',
+    });
+
+    const foundLabels = OVERVIEW_FLOWS.filter((t) => live.some((f) => t.match(f.name ?? ''))).map(
+      (t) => t.label
+    );
+    expect(
+      foundLabels.length,
+      `Expected named Overview flows in catalog. Found: ${foundLabels.join(', ') || '(none)'}`
+    ).toBeGreaterThan(0);
   });
 });

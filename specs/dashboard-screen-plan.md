@@ -1,14 +1,10 @@
-# Synergy Invoice Application — Dashboard Screen Test Plan
+# Dashboard screen plan
 
-**Status:** Source of truth for the Dashboard screen (regression + automation)  
-**Spec file:** `tests/dashboard.spec.ts`  
+**Status:** Source of truth for the Dashboard screen  
+**Spec file:** `tests/dashboard-screen.spec.ts`  
 **Seed:** `tests/seed.spec.ts`  
-**App:** Invoice Canvas (Power Apps) — DEV  
+**App:** Invoice Canvas (Power Apps)  
 **Last aligned:** 2026-07-30 (PM/Admin same UI, data-only difference)
-
-This document replaces older Dashboard plans (`dashboard-test-plan.md` legacy content and the
-Dashboard half of `dashboard-and-overview-test-cases.md`). Use **this file** to update the
-regression Excel and to drive Playwright generation/healing.
 
 ---
 
@@ -16,9 +12,9 @@ regression Excel and to drive Playwright generation/healing.
 
 | In scope | Out of scope (other plans) |
 |----------|----------------------------|
-| Dashboard landing UI (same layout for PM and Admin) | Invoice Overview list behaviour → `invoice-overview-test-plan.md` |
-| Invoice Tasks tiles + View buttons (visibility) | Create Invoice form fields → `create-invoice-test-plan.md` |
-| Region filter on Dashboard | Flow run / Power Automate deep checks → `flow-tracking` suite |
+| Dashboard landing UI (same layout for PM and Admin) | Invoice Overview list behaviour → `invoice-overview-screen-plan.md` |
+| Invoice Tasks tiles + View buttons (visibility) | Create Invoice form fields → `create-invoice-screen-plan.md` |
+| Region filter on Dashboard | Flow names and parents → `invoice-flows.md` |
 | UI counts vs Dataverse (**same tiles**, role-specific data) | Summary **card KPI numbers** vs Dataverse (not yet) |
 | Role matrix: **PM** vs **BDU (Admin)** — **data scope only** | Flipping one user’s Security Roles mid-suite |
 
@@ -62,7 +58,7 @@ Implications for testing:
 **Run (admin today)**
 
 ```powershell
-npx playwright test tests/dashboard.spec.ts --project=chromium
+npx playwright test tests/dashboard-screen.spec.ts --project=chromium-admin
 ```
 
 ---
@@ -93,7 +89,7 @@ Regression sheet “summary tiles” that list Submitted / Reviewed / … refer 
 
 | Source | What we took |
 |--------|----------------|
-| **Existing automation** (`tests/dashboard.spec.ts`) | TC-DB-01…06 UI; TC-DV-01…09 Dataverse count match (admin filters) |
+| **Existing automation** (`tests/dashboard-screen.spec.ts`) | TC-DB-01…06 UI; TC-DV-01…09 Dataverse count match (admin filters) |
 | **Regression Excel** (screenshot) | DB-001…007 — page load, nav, header, region (BDU), PM total tasks user-specific |
 | **Added in this plan** | Same UI / different data principle; Overview nav; Help/profile/bell; cards vs tasks; Dataverse Excel rows; region + dual-role **data** matrix; cycle-end date |
 
@@ -613,13 +609,3 @@ match as Admin-only.
 2. **KPI summary cards** — For PM, are Total Invoices / Partners / Project / Revenue also user-scoped, or only Invoice Tasks tiles?  
 3. **Empty PM tiles** — If a PM has zero Submitted, is the row still shown as `0 Submitted` (expected: yes, same UI)?
 
----
-
-## 12. Retired documents
-
-| File | Action |
-|------|--------|
-| Previous content of `specs/dashboard-test-plan.md` | **Replaced** by this document (same path). |
-| `specs/dashboard-and-overview-test-cases.md` | **Removed** as Dashboard SOT; Overview remains in `specs/invoice-overview-test-plan.md`. |
-
-Any link that pointed at the combined Dashboard+Overview doc for Dashboard should use **this file** instead.
