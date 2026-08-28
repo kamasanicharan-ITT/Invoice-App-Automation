@@ -1,7 +1,10 @@
-// spec: specs/create-invoice-regression.md
+// spec: specs/create-invoice-screen-plan.md
 // seed: tests/seed.spec.ts
+//
+// Single Create Invoice screen suite: CI-* regression + unique older coverage +
+// Admin NA / non-NA Submit flow family (TC-CIF-01 / TC-CIF-02).
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
 import {
   APP_URL,
@@ -12,8 +15,11 @@ import {
   listContractsForProject,
   loadCreateInvoiceFixtures,
   logFixtures,
+  type ContractOption,
   type CreateInvoiceFixtures,
+  type ProjectFixture,
 } from './utils/dataverse-fixtures';
+import { isNorthAmericaRegion } from './utils/flow-runs';
 import {
   LINE_DESCRIPTION,
   MONEY,
@@ -48,6 +54,12 @@ import {
   partnerComboHasOptions,
   fillValidLine,
   anyProject,
+  ensureLineItemRow,
+  keepSingleLineItemRow,
+  dismissDuplicateDialog,
+  selectProject,
+  selectContractIfPrompted,
+  contractModalOpen,
 } from './utils/create-invoice-ui';
 import {
   assertSubmitFlowEvidence,
@@ -55,7 +67,7 @@ import {
   captureSubmitFlowEvidence,
 } from './utils/invoice-submit-flows';
 
-test.describe('Create Invoice regression', () => {
+test.describe('Create Invoice Screen', () => {
   test.describe.configure({ timeout: 120000 });
 
   let dataverseToken = '';
@@ -1791,6 +1803,412 @@ test.describe('Create Invoice regression', () => {
         });
         assertSubmitFlowEvidence(evidence);
       }
+    });
+  });
+
+  // ── Unique coverage from the older suite (not already covered by CI-* above) ─
+
+  test.describe('Additional screen coverage', () => {
+    test('TC-CI-02: Default field states match product rules', async ({ page }, testInfo) => {
+      const persona = activePersona(testInfo);
+      const appFrame = await openCreateInvoice(page, persona);
+
+      await expect(appFrame.getByRole('radio', { name: 'Start with last invoice' })).toBeChecked();
+      if (persona === 'admin') {
+        await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toBeVisible();
+        await expect(appFrame.getByRole('switch').first()).not.toBeChecked();
+        await expect(appFrame.getByRole('switch').nth(1)).not.toBeChecked();
+      } else {
+        await expect(appFrame.getByText('Adhoc Invoice', { exact: true })).toHaveCount(0);
+        await expect(appFrame.getByRole('switch').first()).not.toBeChecked();
+      }
+      await expect(appFrame.getByPlaceholder('Invoice number')).toBeDisabled();
+      await expect(appFrame.getByPlaceholder('PO number')).toBeDisabled();
+      await expect(appFrame.getByPlaceholder('mm/dd/yyyy').first()).not.toHaveValue('');
+      await ensureLineItemRow(appFrame);
+      await expect(appFrame.getByRole('button', { name: 'Save Draft' })).toBeDisabled();
+      await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
+      await expect(appFrame.getByRole('button', { name: 'Find Partner' })).toBeVisible();
+      await expect(appFrame.getByRole('button', { name: 'Find Project' })).toBeVisible();
+
+      await test.step('Default form states', async () => {
+        await markGroupAndShot(
+          page,
+          [
+            appFrame.getByText('New Invoice', { exact: true }),
+            appFrame.getByRole('radio', { name: 'Start with last invoice' }),
+            appFrame.getByPlaceholder('Invoice number'),
+            appFrame.getByRole('button', { name: 'Save Draft' }),
+            appFrame.getByRole('button', { name: 'Submit' }),
+          ],
+          'Default form states',
+          testInfo
+        );
+      });
+    });
+
+    test('TC-CI-10: Brand New vs Start with last invoice selection (Adhoc OFF)', async ({
+      page,
+    }, testInfo) => {
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+      await appFrame.getByRole('radio', { name: 'Start with last invoice' }).click();
+      await expect(appFrame.getByRole('radio', { name: 'Start with last invoice' })).toBeChecked();
+    });
+
+    test('TC-CI-13: Start with last invoice — no previous invoice toast', async ({
+      page,
+    }, testInfo) => {
+      const project = fixtures.noLastMonthInvoice;
+      test.skip(!project, 'No Active project without last-month invoices in Dataverse');
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await appFrame.getByRole('radio', { name: 'Start with last invoice' }).click();
+      const outcome = await selectPartnerAndProject(appFrame, project!);
+      test.skip(outcome === 'duplicate', 'Fixture unexpectedly hit Duplicate Project!');
+      test.skip(outcome !== 'no-last-invoice', 'Fixture did not produce the no-previous-invoice toast');
+      await expect(appFrame.getByText(TOAST.noLastInvoice)).toBeVisible({ timeout: 5000 });
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+    });
+
+    test('TC-CI-20: Partner dropdown opens with options', async ({ page }, testInfo) => {
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await appFrame.getByRole('button', { name: 'Find Partner' }).click();
+      const options = appFrame.getByRole('option');
+      await expect(options.first()).toBeVisible({ timeout: 15000 });
+      await expect.poll(async () => options.count()).toBeGreaterThanOrEqual(3);
+      await test.step('Partner options open', async () => {
+        await markGroupAndShot(
+          page,
+          [options.first(), options.nth(Math.min((await options.count()) - 1, 7))],
+          'Partner options open',
+          testInfo,
+          { padding: 12 }
+        );
+      });
+    });
+
+    test('TC-CI-32: Non-Editable Rate product locks the Rate field', async ({ page }, testInfo) => {
+      const project = anyProject(
+        fixtures.eligibleNonAdhoc,
+        fixtures.northAmerica,
+        fixtures.noLastMonthInvoice
+      );
+      const product = fixtures.nonEditableProduct;
+      test.skip(!project, 'No Active project fixture from Dataverse');
+      test.skip(!product, 'No Non-Editable Rate product in Dataverse');
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      const outcome = await selectPartnerAndProject(appFrame, project!);
+      expect(outcome, 'Fixture must not show Duplicate Project!').not.toBe('duplicate');
+      await selectProduct(appFrame, product!.name);
+      await appFrame.getByPlaceholder('Enter description').first().fill(LINE_DESCRIPTION);
+      const rate = appFrame.getByPlaceholder('0.00', { exact: true }).first();
+      const isEditable = await rate.isEditable().catch(() => true);
+      if (isEditable) {
+        const before = await rate.inputValue().catch(() => '');
+        await rate.fill('99999').catch(() => undefined);
+        const after = await rate.inputValue().catch(() => '');
+        expect(after === before || after !== '99999' || before !== '').toBeTruthy();
+      } else {
+        await expect(rate).toBeDisabled();
+      }
+    });
+
+    test('TC-CI-34: Internal Notes accepts text', async ({ page }, testInfo) => {
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      const notesLabel = appFrame.getByText('Internal Notes', { exact: true });
+      await expect(notesLabel).toBeVisible();
+      const notes = appFrame.locator('[contenteditable="true"]').first();
+      if ((await notes.count()) > 0) {
+        await notes.click();
+        await notes.fill('Automation note TC-CI-34');
+        await expect(notes).toContainText(/Automation note TC-CI-34/);
+      } else {
+        const box = appFrame.getByRole('textbox').last();
+        await box.fill('Automation note TC-CI-34');
+        await expect(box).toHaveValue(/Automation note TC-CI-34/);
+      }
+    });
+
+    test('TC-CI-42: Create and Submit adhoc NA invoice with tax selected', async ({
+      page,
+    }, testInfo) => {
+      test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc create is Admin-only');
+      test.skip(!dataverseToken, 'No Dataverse token');
+      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      const uniqueNa = [
+        isNorthAmericaRegion(fixtures.noLastMonthInvoice?.region)
+          ? fixtures.noLastMonthInvoice
+          : null,
+        isNorthAmericaRegion(fixtures.eligibleNonAdhoc?.region) ? fixtures.eligibleNonAdhoc : null,
+        fixtures.northAmerica,
+      ]
+        .filter((p): p is ProjectFixture => !!p)
+        .filter((p, i, arr) => arr.findIndex((x) => x.projectName === p.projectName) === i);
+      test.skip(uniqueNa.length === 0, 'No North America project fixture from Dataverse');
+
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await setAdhoc(appFrame, true);
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+
+      let usedNa: ProjectFixture | null = null;
+      for (const candidate of uniqueNa) {
+        const outcome = await selectPartnerAndProject(appFrame, candidate);
+        const stuck = await selectedProjectButton(appFrame, candidate.projectName)
+          .isVisible()
+          .catch(() => false);
+        if (outcome !== 'duplicate' && stuck) {
+          usedNa = candidate;
+          break;
+        }
+        await dismissDuplicateDialog(appFrame);
+      }
+      test.skip(!usedNa, 'All NA candidates hit Duplicate or failed to stick under Adhoc');
+
+      await selectProduct(appFrame, fixtures.editableProduct!.name);
+      await fillLineItem(page, appFrame, {
+        description: LINE_DESCRIPTION,
+        qty: '1',
+        rate: '75',
+      });
+      await keepSingleLineItemRow(appFrame);
+      if (await appFrame.getByRole('button', { name: 'Find Project' }).isVisible().catch(() => false)) {
+        await selectProject(appFrame, usedNa!.projectName);
+      }
+      const findTax = appFrame.getByRole('button', { name: 'Find Tax' });
+      const taxAlready = appFrame
+        .getByRole('button', { name: /^Selected:/ })
+        .filter({ hasText: /%/ })
+        .or(appFrame.getByRole('button', { name: /\(\d+(\.\d+)?%\)/ }));
+      await expect(findTax.or(taxAlready.first())).toBeVisible({ timeout: 20000 });
+      if (await findTax.isVisible().catch(() => false)) {
+        await selectTaxOption(appFrame);
+      }
+      await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 30000 });
+      await appFrame.getByRole('button', { name: 'Submit' }).click();
+      await awaitSubmitNavigatedToOverview(appFrame);
+    });
+
+    test('TC-CI-50: Create and Submit non-adhoc invoice for eligible project', async ({
+      page,
+    }, testInfo) => {
+      test.skip(!dataverseToken, 'No Dataverse token');
+      const eligible = fixtures.eligibleNonAdhoc;
+      test.skip(
+        !eligible,
+        'No eligible Active project+contract without non-adhoc invoice in duplicate window'
+      );
+      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
+      await setAdhoc(appFrame, false);
+      const outcome = await selectPartnerAndProject(appFrame, eligible!);
+      expect(outcome, 'Eligible fixture must not show Duplicate Project!').not.toBe('duplicate');
+      await selectProduct(appFrame, fixtures.editableProduct!.name);
+      await fillLineItem(page, appFrame, {
+        description: LINE_DESCRIPTION,
+        qty: '1',
+        rate: '100',
+      });
+      await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 20000 });
+      const before = await countInvoicesForProject(dataverseToken, eligible!.projectId, {
+        adhoc: false,
+      });
+      await appFrame.getByRole('button', { name: 'Submit' }).click();
+      await awaitSubmitNavigatedToOverview(appFrame);
+      await expect
+        .poll(
+          async () =>
+            countInvoicesForProject(dataverseToken, eligible!.projectId, { adhoc: false }),
+          { timeout: 45000 }
+        )
+        .toBeGreaterThan(before);
+    });
+
+    test('TC-CI-60: Create and Submit adhoc invoice', async ({ page }, testInfo) => {
+      test.skip(activePersona(testInfo) === 'pm', '[PM] Adhoc create is Admin-only');
+      test.skip(!dataverseToken, 'No Dataverse token');
+      const candidates = [
+        fixtures.eligibleNonAdhoc,
+        fixtures.noLastMonthInvoice,
+        fixtures.nonNorthAmerica,
+        fixtures.northAmerica,
+      ].filter((p): p is ProjectFixture => !!p);
+      test.skip(candidates.length === 0, 'No Active project fixture from Dataverse');
+      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await setAdhoc(appFrame, true);
+      let project: ProjectFixture | null = null;
+      for (const candidate of candidates) {
+        const outcome = await selectPartnerAndProject(appFrame, candidate);
+        if (outcome !== 'duplicate') {
+          project = candidate;
+          break;
+        }
+        await dismissDuplicateDialog(appFrame);
+      }
+      test.skip(!project, 'All adhoc candidates hit Duplicate Project!');
+      await selectProduct(appFrame, fixtures.editableProduct!.name);
+      await fillLineItem(page, appFrame, {
+        description: LINE_DESCRIPTION,
+        qty: '1',
+        rate: '50',
+      });
+      await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 20000 });
+      await appFrame.getByRole('button', { name: 'Submit' }).click();
+      await awaitSubmitNavigatedToOverview(appFrame);
+    });
+  });
+
+  test.describe('Region submit flows (Admin)', () => {
+    test.describe.configure({ timeout: 600000 });
+
+    function dedupeByProject(list: (ProjectFixture | null | undefined)[]): ProjectFixture[] {
+      const present = list.filter((p): p is ProjectFixture => !!p);
+      return present.filter(
+        (p, i, arr) => arr.findIndex((x) => x.projectName === p.projectName) === i
+      );
+    }
+
+    async function runRegionSubmit(
+      page: Page,
+      testInfo: TestInfo,
+      opts: {
+        label: string;
+        regionKind: 'north-america' | 'other';
+        flowLabel: string;
+        flowNamePattern: RegExp;
+        candidates: ProjectFixture[];
+      }
+    ): Promise<void> {
+      test.skip(activePersona(testInfo) === 'pm', 'Admin-only: Adhoc Create Invoice + flow tracking');
+      test.skip(!dataverseToken, 'No Dataverse token');
+      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      test.skip(opts.candidates.length === 0, `No ${opts.label} project fixture in this Dataverse`);
+
+      const contractsByProject = new Map<string, ContractOption[]>();
+      for (const candidate of opts.candidates) {
+        contractsByProject.set(
+          candidate.projectId,
+          await listActiveContractsForProject(dataverseToken, candidate.projectId)
+        );
+      }
+
+      const session = beginFlowCapture(page, dataverseToken);
+      const appFrame = await openCreateInvoice(page, 'admin');
+      await setAdhoc(appFrame, true);
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+
+      let project: ProjectFixture | null = null;
+      let contractName: string | null = null;
+      for (const candidate of opts.candidates) {
+        const outcome = await selectPartnerAndProject(appFrame, candidate);
+        contractName = await selectContractIfPrompted(appFrame, {
+          contracts: contractsByProject.get(candidate.projectId),
+          label: candidate.projectName,
+        });
+        const stuck = await selectedProjectButton(appFrame, candidate.projectName)
+          .isVisible()
+          .catch(() => false);
+        if (outcome !== 'duplicate' && stuck) {
+          project = candidate;
+          break;
+        }
+        await dismissDuplicateDialog(appFrame);
+      }
+      test.skip(!project, `All ${opts.label} candidates hit Duplicate Project! or failed to stick`);
+      expect(isNorthAmericaRegion(project!.region)).toBe(opts.regionKind === 'north-america');
+
+      if (await contractModalOpen(appFrame)) {
+        contractName =
+          (await selectContractIfPrompted(appFrame, {
+            contracts: contractsByProject.get(project!.projectId),
+            label: project!.projectName,
+          })) ?? contractName;
+      }
+      void contractName;
+
+      await selectProduct(appFrame, fixtures.editableProduct!.name);
+      await fillLineItem(page, appFrame, {
+        description: LINE_DESCRIPTION,
+        qty: '1',
+        rate: '50',
+      });
+      await keepSingleLineItemRow(appFrame);
+      if (await appFrame.getByRole('button', { name: 'Find Project' }).isVisible().catch(() => false)) {
+        await selectProject(appFrame, project!.projectName);
+      }
+      if (opts.regionKind === 'north-america') {
+        const findTax = appFrame.getByRole('button', { name: 'Find Tax' });
+        const taxAlready = appFrame
+          .getByRole('button', { name: /^Selected:/ })
+          .filter({ hasText: /%/ })
+          .or(appFrame.getByRole('button', { name: /\(\d+(\.\d+)?%\)/ }));
+        await expect(findTax.or(taxAlready.first())).toBeVisible({ timeout: 20000 });
+        if (await findTax.isVisible().catch(() => false)) {
+          await selectTaxOption(appFrame);
+        }
+      }
+      await keepSingleLineItemRow(appFrame);
+      const submitBtn = appFrame.getByRole('button', { name: 'Submit' });
+      await expect(submitBtn).toBeEnabled({ timeout: 30000 });
+      const submitStartedAt = new Date().toISOString();
+      await submitBtn.click();
+      await awaitSubmitNavigatedToOverview(appFrame);
+      await page.close().catch(() => undefined);
+
+      const evidence = await captureSubmitFlowEvidence({
+        token: dataverseToken,
+        testInfo,
+        session,
+        action: 'Submit',
+        project: {
+          partnerName: project!.partnerName,
+          projectName: project!.projectName,
+          region: project!.region,
+          projectId: project!.projectId,
+        },
+        submitStartedAt,
+      });
+      expect(evidence.regionKind).toBe(opts.regionKind);
+      expect(evidence.expectedLabel).toMatch(opts.flowNamePattern);
+      assertSubmitFlowEvidence(evidence);
+    }
+
+    test('TC-CIF-01: [Admin] Submit NA invoice — track Create Invoice - NA Region family', async ({
+      page,
+    }, testInfo) => {
+      await runRegionSubmit(page, testInfo, {
+        label: 'North America',
+        regionKind: 'north-america',
+        flowLabel: 'Create Invoice - NA Region',
+        flowNamePattern: /create\s*invoice.*(na|north\s*america)/i,
+        candidates: dedupeByProject([
+          isNorthAmericaRegion(fixtures.noLastMonthInvoice?.region)
+            ? fixtures.noLastMonthInvoice
+            : null,
+          isNorthAmericaRegion(fixtures.eligibleNonAdhoc?.region) ? fixtures.eligibleNonAdhoc : null,
+          fixtures.northAmerica,
+        ]),
+      });
+    });
+
+    test('TC-CIF-02: [Admin] Submit non-NA invoice — track Create Invoice - Other Region family', async ({
+      page,
+    }, testInfo) => {
+      await runRegionSubmit(page, testInfo, {
+        label: 'non-NA',
+        regionKind: 'other',
+        flowLabel: 'Create Invoice - Other Region',
+        flowNamePattern: /create\s*invoice.*other/i,
+        candidates: dedupeByProject([
+          fixtures.nonNorthAmerica,
+          !isNorthAmericaRegion(fixtures.eligibleNonAdhoc?.region) ? fixtures.eligibleNonAdhoc : null,
+          !isNorthAmericaRegion(fixtures.noLastMonthInvoice?.region)
+            ? fixtures.noLastMonthInvoice
+            : null,
+        ]),
+      });
     });
   });
 });

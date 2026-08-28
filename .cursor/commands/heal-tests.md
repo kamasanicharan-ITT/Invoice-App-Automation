@@ -6,6 +6,6 @@ Use the `playwright-test-healer` skill. Run the target test(s) with the `playwri
 MCP, investigate failures via snapshot/console/network, fix locators and assertions per the
 Canvas conventions, and re-run until green. Use `test.fixme()` only as a last resort.
 
-**Argument:** a spec file, a test name, or `all` (default). Example: `tests/dashboard.spec.ts`.
+**Argument:** a spec file, a test name, or `all` (default). Example: `tests/dashboard-screen.spec.ts`.
 
 Target: **$ARGUMENTS**

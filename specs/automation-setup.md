@@ -425,19 +425,19 @@ From `playwright.config.ts`:
 npx playwright test --project=chromium-admin
 
 # Dashboard suite (Admin)
-npx playwright test tests/dashboard.spec.ts --project=chromium-admin
+npx playwright test tests/dashboard-screen.spec.ts --project=chromium-admin
 
 # Same suite as PM (persona-scoped counts / visibility)
-npx playwright test tests/dashboard.spec.ts --project=chromium-pm
+npx playwright test tests/dashboard-screen.spec.ts --project=chromium-pm
 
 # Create Invoice
-npx playwright test tests/create-invoice.spec.ts --project=chromium-admin
+npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin
 
 # Invoice Overview
-npx playwright test tests/invoice-overview.spec.ts --project=chromium-admin
+npx playwright test tests/invoice-overview-screen.spec.ts --project=chromium-admin
 
 # Run Admin and PM in one go
-npx playwright test tests/dashboard.spec.ts --project=chromium-admin --project=chromium-pm
+npx playwright test tests/dashboard-screen.spec.ts --project=chromium-admin --project=chromium-pm
 ```
 
 ### 8.3 Config defaults (know these)
@@ -453,11 +453,11 @@ npx playwright test tests/dashboard.spec.ts --project=chromium-admin --project=c
 | Suite | File | Focus |
 |-------|------|--------|
 | Smoke | `tests/smoke.spec.ts` | Session + app load |
-| Dashboard | `tests/dashboard.spec.ts` | UI structure + Dataverse count validation |
-| Create Invoice | `tests/create-invoice.spec.ts` | Form, validation, submit, Adhoc (Admin), etc. |
-| Invoice Overview | `tests/invoice-overview.spec.ts` | Overview UI / filters |
+| Dashboard | `tests/dashboard-screen.spec.ts` | UI structure + Dataverse count validation |
+| Create Invoice | `tests/create-invoice-screen.spec.ts` | Form, validation, submit, Adhoc (Admin), etc. |
+| Invoice Overview | `tests/invoice-overview-screen.spec.ts` | Overview UI / filters |
 
-Test plans that describe intended coverage live under `specs/` (e.g. `dashboard-test-plan.md`, `create-invoice-test-plan.md`).
+Test plans that describe intended coverage live under `specs/` (e.g. `dashboard-screen-plan.md`, `create-invoice-screen-plan.md`).
 
 ---
 
@@ -529,12 +529,12 @@ Before asking Cursor to plan or generate:
 **How to run:**
 
 ```
-/generate-test specs/dashboard-test-plan.md -> TC-DB-05 Create Invoice navigation
+/generate-test specs/dashboard-screen-plan.md -> TC-DB-05 Create Invoice navigation
 ```
 
 Or:
 
-> Generate a Playwright test for scenario TC-CI-03 Partner → Project cascade from `specs/create-invoice-test-plan.md` using Admin auth.
+> Generate a Playwright test for scenario TC-CI-03 Partner → Project cascade from `specs/create-invoice-screen-plan.md` using Admin auth.
 
 **Conventions the generator must follow** (enforced by rules + skill):
 
@@ -555,7 +555,7 @@ Or:
 **How to run:**
 
 ```
-/heal-tests tests/dashboard.spec.ts
+/heal-tests tests/dashboard-screen.spec.ts
 ```
 
 ```
@@ -571,12 +571,12 @@ Or:
 Goal: add coverage for a small Dashboard check.
 
 1. Ensure smoke test passes (Section 7)
-2. Run `/plan-tests Dashboard` (or open existing `specs/dashboard-test-plan.md`)
+2. Run `/plan-tests Dashboard` (or open existing `specs/dashboard-screen-plan.md`)
 3. Pick one scenario, e.g. navigation to Create Invoice
 4. Run `/generate-test` for that scenario
 5. Run the new/updated spec:
    ```powershell
-   npx playwright test tests/dashboard.spec.ts --project=chromium-admin
+   npx playwright test tests/dashboard-screen.spec.ts --project=chromium-admin
    ```
 6. If red, run `/heal-tests` on that file
 7. Commit **only** the plan + test source (never `auth/`)
@@ -630,9 +630,9 @@ Treat this as the **checklist of inputs** for quality AI output.
 
 > `/plan-tests Create Invoice` including Admin Adhoc submit and PM Adhoc hidden. Tag each scenario with persona and allow/deny/visible/hidden.
 
-> `/generate-test specs/create-invoice-test-plan.md -> TC-CI-12 Submit non-adhoc happy path` using `auth/admin.json`.
+> `/generate-test specs/create-invoice-screen-plan.md -> TC-CI-12 Submit non-adhoc happy path` using `auth/admin.json`.
 
-> `/heal-tests tests/create-invoice.spec.ts` — Partner dropdown locator is flaky after reload.
+> `/heal-tests tests/create-invoice-screen.spec.ts` — Partner dropdown locator is flaky after reload.
 
 **Weak:**
 
@@ -647,7 +647,6 @@ Treat this as the **checklist of inputs** for quality AI output.
 ```
 Invoice-App-Automation/
 ├── AGENTS.md                 # Agent / project guide
-├── automation-setup.md       # This document
 ├── package.json              # npm scripts + Playwright dependency
 ├── playwright.config.ts      # Projects, storageState, reporters
 ├── tsconfig.json
@@ -657,18 +656,23 @@ Invoice-App-Automation/
 ├── tests/
 │   ├── smoke.spec.ts         # Setup confirmation test
 │   ├── seed.spec.ts          # Generator template (do not hand-edit)
-│   ├── dashboard.spec.ts
-│   ├── create-invoice.spec.ts
-│   ├── invoice-overview.spec.ts
+│   ├── dashboard-screen.spec.ts
+│   ├── create-invoice-screen.spec.ts
+│   ├── invoice-overview-screen.spec.ts
 │   └── utils/
-│       ├── host-dialogs.ts   # Allow consent + host alerts
-│       ├── screenshot.ts     # markAndShot / markGroupAndShot
+│       ├── host-dialogs.ts
+│       ├── screenshot.ts
+│       ├── create-invoice-ui.ts
+│       ├── invoice-overview-ui.ts
 │       └── dataverse-fixtures.ts
-├── specs/                    # Markdown test plans
-│   ├── dashboard-test-plan.md
-│   ├── create-invoice-test-plan.md
-│   ├── invoice-overview-test-plan.md
-│   └── cursor-roadmap.md     # Future: multi-env, ADO CI
+├── specs/                    # Plans and setup docs
+│   ├── automation-setup.md   # This document
+│   ├── phase2.md
+│   ├── dashboard-screen-plan.md
+│   ├── create-invoice-screen-plan.md
+│   ├── invoice-overview-screen-plan.md
+│   ├── invoice-flows.md
+│   └── cursor-roadmap.md
 └── .cursor/
     ├── rules/                # Persistent AI knowledge
     ├── skills/               # Planner, Generator, Healer, Auth
@@ -816,18 +820,18 @@ npx playwright test tests/smoke.spec.ts --project=chromium-admin
 npx playwright show-report
 
 # --- Day-to-day runs ---
-npx playwright test tests/dashboard.spec.ts --project=chromium-admin
-npx playwright test tests/create-invoice.spec.ts --project=chromium-admin
-npx playwright test tests/invoice-overview.spec.ts --project=chromium-admin
-npx playwright test tests/dashboard.spec.ts --project=chromium-pm
+npx playwright test tests/dashboard-screen.spec.ts --project=chromium-admin
+npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin
+npx playwright test tests/invoice-overview-screen.spec.ts --project=chromium-admin
+npx playwright test tests/dashboard-screen.spec.ts --project=chromium-pm
 ```
 
 **In Cursor chat:**
 
 ```
 /plan-tests Dashboard
-/generate-test specs/dashboard-test-plan.md -> TC-DB-01 ...
-/heal-tests tests/dashboard.spec.ts
+/generate-test specs/dashboard-screen-plan.md -> TC-DB-01 ...
+/heal-tests tests/dashboard-screen.spec.ts
 ```
 
 ---
@@ -866,10 +870,9 @@ Dataverse filters in tests must mirror this via shared helpers — do not invent
 | Doc | Use when |
 |-----|----------|
 | `AGENTS.md` | Quick orientation for humans and AI agents |
-| `userstory.md` | Phase 1 scope / acceptance context |
-| `phase2.md` | Multi-env (SIT/QA/UAT) and deployment-ready Create Invoice |
+| `specs/phase2.md` | Multi-env (SIT/QA/UAT) and deployment-ready Create Invoice |
 | `specs/cursor-roadmap.md` | Future ADO CI and env parameterization design |
-| `specs/*-test-plan.md` | Scenario source of truth before generating code |
+| `specs/*-screen-plan.md` | Scenario source of truth before generating code |
 | `.cursor/rules/*.mdc` | Detailed domain and coding rules |
 
 ---
