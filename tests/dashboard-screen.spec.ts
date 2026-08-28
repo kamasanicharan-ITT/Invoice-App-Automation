@@ -1,4 +1,4 @@
-// spec: specs/dashboard-test-plan.md
+// spec: specs/dashboard-screen-plan.md
 // seed: tests/seed.spec.ts
 
 import { test, expect, request, type Page, type FrameLocator, type Request, type TestInfo } from '@playwright/test';

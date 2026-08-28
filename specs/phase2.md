@@ -61,7 +61,7 @@ Do not re-deliver Phase 1 work. Phase 2 builds on:
 | ADO CI pipeline                                      | Deferred (may be Phase 3; not a Phase 2 gate unless pulled forward)    |
 
 
-Reference: Phase 1 ADO story / `userstory.md`; roadmap notes in `specs/cursor-roadmap.md`.
+Reference: roadmap notes in `specs/cursor-roadmap.md`. Setup: `specs/automation-setup.md`.
 
 ---
 
@@ -123,7 +123,7 @@ Compose Create Invoice automation into a **clear, complete, environment-portable
 
 **Goals**
 
-- Align implemented tests to `specs/create-invoice-test-plan.md` (source of truth).
+- Align implemented tests to `specs/create-invoice-screen-plan.md` (source of truth).
 - Make Admin vs PM behavior explicit and passing:
   - **Admin:** Adhoc visible; Adhoc create/submit; NA tax paths as applicable
   - **PM:** Adhoc hidden; shared non-adhoc create/duplicate; no admin-only cases
@@ -255,7 +255,7 @@ Phase 2 is complete when:
 
 ### C. Stabilization & clarity
 
-1. A short Phase 2 runbook exists (in this story’s wiki/ADO notes or `phase2.md` / project docs) covering: how to set `ENV`, capture auth per env, which projects to run (Admin vs PM), and minimum seed-data expectations.
+1. A short Phase 2 runbook exists (in this story’s wiki/ADO notes or `specs/phase2.md` / project docs) covering: how to set `ENV`, capture auth per env, which projects to run (Admin vs PM), and minimum seed-data expectations.
 2. Flaky DEV-only assumptions that break on SIT/QA are removed or replaced with env-aware fixtures / conditional skips with explicit reasons.
 3. Role model remains documented and enforced: Admin vs PM Create Invoice access (Adhoc visible vs hidden).
 4. No production credentials or auth files are committed; `auth/` remains gitignored.
@@ -264,7 +264,7 @@ Phase 2 is complete when:
 
 ### D. Create Invoice — deployment-ready suite
 
-1. Create Invoice scenarios are composed against `specs/create-invoice-test-plan.md` with clear TC-IDs (`TC-CI-*`) and persona tags (shared / Admin-only / PM-only).
+1. Create Invoice scenarios are composed against `specs/create-invoice-screen-plan.md` with clear TC-IDs (`TC-CI-*`) and persona tags (shared / Admin-only / PM-only).
 2. Shared UI and non-adhoc create/submit/duplicate cases are implemented and passing for Admin; PM shared cases pass under `chromium-pm` when PM auth is available.
 3. Admin-only Adhoc cases (toggle forces Brand New; Adhoc submit; Adhoc + NA tax where applicable) pass on Admin and are skipped on PM.
 4. PM-only case (Adhoc toggle hidden) passes on PM and is skipped on Admin.
@@ -331,7 +331,7 @@ Use during delivery; do not paste as Acceptance Criteria unless desired.
 
 ### Create Invoice deployment suite
 
-- [ ] Align suite to `specs/create-invoice-test-plan.md`
+- [ ] Align suite to `specs/create-invoice-screen-plan.md`
 - [ ] Complete Admin + PM matrix (Adhoc visible/hidden)
 - [ ] Env-aware Dataverse fixtures
 - [ ] Critical-path subset documented
@@ -344,17 +344,17 @@ Use during delivery; do not paste as Acceptance Criteria unless desired.
 
 ```powershell
 # DEV (default)
-npx playwright test tests/create-invoice.spec.ts --project=chromium-admin
+npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin
 
 # SIT
 $env:ENV="sit"; npx playwright test tests/smoke.spec.ts --project=chromium-admin
-$env:ENV="sit"; npx playwright test tests/dashboard.spec.ts --project=chromium-admin
-$env:ENV="sit"; npx playwright test tests/create-invoice.spec.ts --project=chromium-admin
-$env:ENV="sit"; npx playwright test tests/create-invoice.spec.ts --project=chromium-pm
+$env:ENV="sit"; npx playwright test tests/dashboard-screen.spec.ts --project=chromium-admin
+$env:ENV="sit"; npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin
+$env:ENV="sit"; npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-pm
 
 # QA
-$env:ENV="qa"; npx playwright test tests/create-invoice.spec.ts --project=chromium-admin
-$env:ENV="qa"; npx playwright test tests/create-invoice.spec.ts --project=chromium-pm
+$env:ENV="qa"; npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-admin
+$env:ENV="qa"; npx playwright test tests/create-invoice-screen.spec.ts --project=chromium-pm
 ```
 
 ---

@@ -47,4 +47,4 @@ Do NOT take screenshots unless absolutely necessary — prefer the snapshot.
 Markdown with clear headings and numbered steps, suitable for dev/QA review. Each top-level
 group becomes a `describe` for the generator. Include a `Seed:` reference
 (`tests/seed.spec.ts`) and, per scenario, the target persona(s). Follow the existing plans
-in `specs/` (e.g. `dashboard-test-plan.md`) for structure.
+in `specs/` (e.g. `dashboard-screen-plan.md`) for structure.
