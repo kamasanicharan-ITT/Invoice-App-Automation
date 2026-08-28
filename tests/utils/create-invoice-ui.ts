@@ -64,27 +64,6 @@ export function fourthMonthStartUsDate(reference = new Date()): string {
   return formatUsDate(new Date(reference.getFullYear(), reference.getMonth() + 4, 1));
 }
 
-export const CURSOR_TEST: ProjectFixture = {
-  partnerName: 'Unimind',
-  projectName: 'Cursor Test',
-  projectId: '',
-};
-
-/** Unimind project used for junk-search steps (live 2026-08-25). */
-export const UNIMIND_FOUR_MONTHS: ProjectFixture = {
-  partnerName: 'Unimind',
-  projectName: '4 months',
-  projectId: '',
-};
-
-/** PM-visible Unimind projects seeded for Rashwanth on DEV. */
-export const PM_UNIMIND_PROJECTS: ProjectFixture[] = [
-  { partnerName: 'Unimind', projectName: 'Test for PM', projectId: '' },
-  { partnerName: 'Unimind', projectName: 'Test for PM 1', projectId: '' },
-  { partnerName: 'Unimind', projectName: 'Test for PM 2', projectId: '' },
-  { partnerName: 'Unimind', projectName: 'Future Creation Test for PM', projectId: '' },
-];
-
 export async function acceptContractIfPrompted(appFrame: FrameLocator): Promise<void> {
   const findContract = appFrame.getByRole('button', { name: 'Find Contract' });
   if (!(await findContract.isVisible({ timeout: 4000 }).catch(() => false))) return;

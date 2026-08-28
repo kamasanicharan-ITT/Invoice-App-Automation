@@ -10,7 +10,8 @@
 
 This plan is **our** automation plan, not a copy of the Excel sheet. Sheet IDs are kept for traceability. Product rules below supersede the sheet where they disagreed with the live app (default radio, Adhoc visibility, calendar-month dates).
 
-Related plans: `create-invoice-test-plan.md` (current suite), `dashboard-test-plan.md`, `invoice-overview-test-plan.md`.
+Related plans: `create-invoice-test-plan.md` (current suite), `dashboard-test-plan.md`, `invoice-overview-test-plan.md`.  
+**Coverage trace (78 IDs, last Admin + PM run):** `specs/create-invoice-regression-trace.md`.
 
 ---
 
