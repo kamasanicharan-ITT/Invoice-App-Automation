@@ -23,11 +23,20 @@ export default defineConfig({
   retries: 1,
   fullyParallel: false,
 
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [
+    ['list'],
+    ['html', { open: 'never' }],
+    ['junit', { outputFile: 'test-results/junit.xml' }],
+  ],
+
+  // Azure Pipelines / any CI sets CI=true. Agents have no UI — must be headless.
+  // Local runs stay headed so you can watch the Canvas app.
+  forbidOnly: !!process.env.CI,
+  workers: process.env.CI ? 1 : undefined,
 
   use: {
     baseURL: env.appUrl,
-    headless: false,
+    headless: !!process.env.CI,
     screenshot: 'on',
     video: 'retain-on-failure',
     trace: 'retain-on-failure',
