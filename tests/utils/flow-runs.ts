@@ -138,14 +138,17 @@ function workflowIdOf(run: FlowRunRow): string {
 
 export async function dvGet<T>(
   token: string,
-  pathAndQuery: string
+  pathAndQuery: string,
+  extraHeaders?: Record<string, string>
 ): Promise<{ ok: boolean; status: number; body: T | null; raw: string }> {
   const api = await request.newContext();
   try {
     const url = pathAndQuery.startsWith('http')
       ? pathAndQuery
       : `${DATAVERSE_URL}/api/data/v9.2/${pathAndQuery}`;
-    const res = await api.get(url, { headers: ODATA_HEADERS(token) });
+    const res = await api.get(url, {
+      headers: { ...ODATA_HEADERS(token), ...extraHeaders },
+    });
     const raw = await res.text();
     let body: T | null = null;
     try {
@@ -159,25 +162,72 @@ export async function dvGet<T>(
   }
 }
 
+/**
+ * List modern (cloud) flows. Dataverse `$top` is treated as a hard cap *without*
+ * `@odata.nextLink` on this org — a `$top=200` page ended at names starting with S
+ * and dropped **Update Invoice - NA/Other Region**. Page via `odata.maxpagesize`
+ * and follow nextLink until exhausted.
+ */
 export async function listCloudFlows(token: string): Promise<{
   ok: boolean;
   status: number;
   flows: WorkflowRow[];
   errorSnippet: string;
 }> {
-  const select =
-    'workflowid,name,uniquename,statecode,category';
+  const select = 'workflowid,name,uniquename,statecode,category';
   const filter = encodeURIComponent(`category eq ${WORKFLOW_CATEGORY_MODERN_FLOW}`);
+  return listWorkflowsPages(
+    token,
+    `workflows?$select=${select}&$filter=${filter}&$orderby=name asc`
+  );
+}
+
+/** Name search across cloud flows (and, if empty, any workflow category). */
+export async function searchWorkflowsByName(
+  token: string,
+  nameContains: string
+): Promise<{
+  ok: boolean;
+  status: number;
+  flows: WorkflowRow[];
+  errorSnippet: string;
+}> {
+  const needle = nameContains.replace(/'/g, "''");
+  const select = 'workflowid,name,uniquename,statecode,category';
+  const cloud = encodeURIComponent(
+    `category eq ${WORKFLOW_CATEGORY_MODERN_FLOW} and contains(name,'${needle}')`
+  );
+  const anyCat = encodeURIComponent(`contains(name,'${needle}')`);
+  const first = await listWorkflowsPages(
+    token,
+    `workflows?$select=${select}&$filter=${cloud}&$orderby=name asc`
+  );
+  if (!first.ok || first.flows.length > 0) return first;
+  return listWorkflowsPages(
+    token,
+    `workflows?$select=${select}&$filter=${anyCat}&$orderby=name asc`
+  );
+}
+
+async function listWorkflowsPages(
+  token: string,
+  firstPathAndQuery: string
+): Promise<{
+  ok: boolean;
+  status: number;
+  flows: WorkflowRow[];
+  errorSnippet: string;
+}> {
   const flows: WorkflowRow[] = [];
-  let next: string | undefined =
-    `workflows?$select=${select}&$filter=${filter}&$orderby=name asc&$top=200`;
+  let next: string | undefined = firstPathAndQuery;
   let lastStatus = 0;
   let lastRaw = '';
 
   while (next) {
     const result = await dvGet<{ value?: WorkflowRow[]; '@odata.nextLink'?: string }>(
       token,
-      next
+      next,
+      { Prefer: 'odata.include-annotations="*",odata.maxpagesize=500' }
     );
     lastStatus = result.status;
     lastRaw = result.raw;
@@ -186,7 +236,7 @@ export async function listCloudFlows(token: string): Promise<{
     }
     flows.push(...(result.body?.value ?? []));
     next = result.body?.['@odata.nextLink'] || undefined;
-    if (flows.length >= 500) break;
+    if (flows.length >= 2000) break;
   }
 
   return { ok: true, status: lastStatus, flows, errorSnippet: '' };
@@ -298,12 +348,91 @@ export async function listFlowRunsForWorkflow(
   );
 }
 
+/** Retired copies must never be treated as the live Create/Update parent. */
+export function isRetiredInvoiceFlowName(name: string): boolean {
+  return /deprecated|\(copy\s*\)|^copy(\s+of)?\b|\bold\b|\bbackup\b|\blegacy\b/i.test(name.trim());
+}
+
+function liveFlows(flows: WorkflowRow[]): WorkflowRow[] {
+  return flows.filter((f) => !isRetiredInvoiceFlowName(f.name ?? ''));
+}
+
 export function findExpectedCreateInvoiceFlows(
   flows: WorkflowRow[],
   regionKind: 'north-america' | 'other' | 'unknown'
 ): WorkflowRow[] {
   const pattern = expectedCreateInvoiceFlowPattern(regionKind);
-  return flows.filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
+  return liveFlows(flows).filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
+}
+
+export function findExpectedUpdateInvoiceFlows(
+  flows: WorkflowRow[],
+  regionKind: 'north-america' | 'other' | 'unknown'
+): WorkflowRow[] {
+  const pattern = expectedUpdateInvoiceFlowPattern(regionKind);
+  return liveFlows(flows).filter((f) => pattern.test(f.name ?? '') && f.statecode === 1);
+}
+
+/** The four live parent flows that own Create Invoice Submit / Edit-resubmit. */
+export type MainInvoiceFlowKey = 'create-na' | 'create-other' | 'update-na' | 'update-other';
+
+export const MAIN_INVOICE_FLOW_LABELS: Record<MainInvoiceFlowKey, string> = {
+  'create-na': 'Create Invoice - NA Region',
+  'create-other': 'Create Invoice - Other Region',
+  'update-na': 'Update Invoice - NA Region',
+  'update-other': 'Update Invoice - Other Region',
+};
+
+function preferLiveOnFlow(matches: WorkflowRow[], exactLabel: string): WorkflowRow | undefined {
+  const on = matches.filter((f) => f.statecode === 1);
+  const exact = on.find((f) => (f.name ?? '').trim().toLowerCase() === exactLabel.toLowerCase());
+  return exact ?? on[0];
+}
+
+/**
+ * Resolve the four live Create/Update × NA/Other catalog rows.
+ * Deprecated / Old / Copy / Backup names are ignored. Off rows are not used as a fallback.
+ */
+export function pickMainInvoiceFlows(flows: WorkflowRow[]): Record<
+  MainInvoiceFlowKey,
+  WorkflowRow | undefined
+> {
+  const catalog = liveFlows(flows);
+  const named = (exactLabel: string, test: (name: string) => boolean) =>
+    preferLiveOnFlow(
+      catalog.filter((f) => test(f.name ?? '')),
+      exactLabel
+    );
+
+  return {
+    'create-na': named(
+      MAIN_INVOICE_FLOW_LABELS['create-na'],
+      (n) => /create\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/update/i.test(n)
+    ),
+    'create-other': named(
+      MAIN_INVOICE_FLOW_LABELS['create-other'],
+      (n) => /create\s*invoice/i.test(n) && /other/i.test(n) && !/update/i.test(n)
+    ),
+    'update-na': named(
+      MAIN_INVOICE_FLOW_LABELS['update-na'],
+      (n) => /update\s*invoice/i.test(n) && /(na\b|north\s*america)/i.test(n) && !/create/i.test(n)
+    ),
+    'update-other': named(
+      MAIN_INVOICE_FLOW_LABELS['update-other'],
+      (n) => /update\s*invoice/i.test(n) && /other/i.test(n) && !/create/i.test(n)
+    ),
+  };
+}
+
+export function expectedMainFlowKey(
+  action: 'Submit' | 'Update',
+  regionKind: 'north-america' | 'other' | 'unknown'
+): MainInvoiceFlowKey | undefined {
+  if (regionKind === 'unknown') return undefined;
+  if (action === 'Submit') {
+    return regionKind === 'north-america' ? 'create-na' : 'create-other';
+  }
+  return regionKind === 'north-america' ? 'update-na' : 'update-other';
 }
 
 export function attachFlowNetworkCapture(page: Page): CapturedFlowCall[] {
@@ -458,8 +587,8 @@ export async function attachFlowReport(
     `# Flow report — ${report.action}`,
     '',
     `- Region kind: **${report.regionKind}**`,
-    `- Expected create flow pattern: \`${report.expectedFlowNamePattern}\``,
-    `- Expected create flow: **${report.expectedFlow?.name ?? '(not in catalog)'}** (${report.expectedFlow?.state ?? 'n/a'})`,
+    `- Expected parent flow pattern: \`${report.expectedFlowNamePattern}\``,
+    `- Expected parent flow: **${report.expectedFlow?.name ?? '(not in catalog)'}** (${report.expectedFlow?.state ?? 'n/a'})`,
     report.expectedFlow?.workflowId ? `- Expected workflow id: ${report.expectedFlow.workflowId}` : '',
     `- Submit started: ${report.submitStartedAt}`,
     `- Project: ${
@@ -471,7 +600,7 @@ export async function attachFlowReport(
     `- Network flow hits: ${report.networkHitCount}`,
     `- Overall success: **${report.success ? 'YES' : 'NO'}**`,
     '',
-    '## Latest run of expected Create Invoice flow (catalog)',
+    `## Latest run of expected ${report.action === 'Update' ? 'Update' : 'Create'} Invoice flow (catalog)`,
     report.expectedFlowLatestRun
       ? [
           `- Name: **${report.expectedFlowLatestRun.flowName}**`,
@@ -483,9 +612,9 @@ export async function attachFlowReport(
             ? `- Error: ${report.expectedFlowLatestRun.errorcode ?? ''} ${report.expectedFlowLatestRun.errormessage}`
             : '- Error: (none)',
         ].join('\n')
-      : '_No runs found for the expected Create Invoice flow._',
+      : `_No runs found for the expected ${report.action === 'Update' ? 'Update' : 'Create'} Invoice flow._`,
     '',
-    '## Matched create flow (this Submit)',
+    `## Matched ${report.action === 'Update' ? 'update' : 'create'} flow (this ${report.action})`,
     report.matchedCreateFlow
       ? [
           `- Name: **${report.matchedCreateFlow.flowName}**`,
@@ -498,7 +627,7 @@ export async function attachFlowReport(
             ? `- Error: ${report.matchedCreateFlow.errorcode ?? ''} ${report.matchedCreateFlow.errormessage ?? ''}`
             : '- Error: (none)',
         ].join('\n')
-      : '_No matching create-invoice flow run found in poll window._',
+      : `_No matching ${report.action === 'Update' ? 'update' : 'create'}-invoice flow run found in poll window._`,
     '',
     '## All runs since submit',
     ...(report.runs.length
@@ -543,22 +672,29 @@ export async function capturePostSubmitFlowReport(opts: {
   waitMs?: number;
 }): Promise<FlowReport> {
   const action = opts.action ?? 'Submit';
-  const expectedPattern = expectedCreateInvoiceFlowPattern(opts.regionKind);
+  const expectedPattern =
+    action === 'Update'
+      ? expectedUpdateInvoiceFlowPattern(opts.regionKind)
+      : expectedCreateInvoiceFlowPattern(opts.regionKind);
   const notes: string[] = [];
 
   const inventory = await listCloudFlows(opts.token);
   const flowNameById = buildFlowNameMap(inventory.ok ? inventory.flows : []);
   const expectedFlows = inventory.ok
-    ? findExpectedCreateInvoiceFlows(inventory.flows, opts.regionKind)
+    ? action === 'Update'
+      ? findExpectedUpdateInvoiceFlows(inventory.flows, opts.regionKind)
+      : findExpectedCreateInvoiceFlows(inventory.flows, opts.regionKind)
     : [];
   if (!inventory.ok) {
     notes.push(`Cloud flow inventory failed: ${inventory.status} ${inventory.errorSnippet}`);
   } else {
-    const createNamed = inventory.flows.filter((f) => /create\s*invoice/i.test(f.name ?? ''));
-    notes.push(
-      `Inventory: ${inventory.flows.length} modern flows; ${createNamed.length} name-match Create Invoice*`
+    const namedParents = inventory.flows.filter((f) =>
+      /(create|update)\s*invoice/i.test(f.name ?? '')
     );
-    for (const f of createNamed.slice(0, 12)) {
+    notes.push(
+      `Inventory: ${inventory.flows.length} modern flows; ${namedParents.length} name-match Create/Update Invoice*`
+    );
+    for (const f of namedParents.slice(0, 16)) {
       notes.push(
         `  catalog: ${f.name} (${f.statecode === 1 ? 'On' : 'Off'}) id=${f.workflowid ?? '?'}`
       );
@@ -601,15 +737,18 @@ export async function capturePostSubmitFlowReport(opts: {
     notes.push('flowruns table not readable — relying on network capture + UI status.');
   }
 
+  const parentNameRe = action === 'Update' ? /update\s*invoice/i : /create\s*invoice/i;
   let summaries = toFlowRunSummaries(runs, flowNameById, expectedPattern);
-  if (!summaries.some((s) => s.matchedExpected || /create\s*invoice/i.test(s.flowName))) {
+  if (!summaries.some((s) => s.matchedExpected || parentNameRe.test(s.flowName))) {
     const sampleHits = toFlowRunSummaries(latestSample, flowNameById, expectedPattern).filter(
       (s) =>
-        (s.matchedExpected || /create\s*invoice/i.test(s.flowName)) &&
+        (s.matchedExpected || parentNameRe.test(s.flowName)) &&
         ((s.starttime && Date.parse(s.starttime) >= sinceMs) || !s.starttime)
     );
     if (sampleHits.length) {
-      notes.push('Matched Create Invoice run from latest org sample (not in new-id window).');
+      notes.push(
+        `Matched ${action === 'Update' ? 'Update' : 'Create'} Invoice run from latest org sample (not in new-id window).`
+      );
       const seen = new Set(summaries.map((s) => s.runId));
       summaries = [...summaries, ...sampleHits.filter((s) => !seen.has(s.runId))];
     }
@@ -621,7 +760,7 @@ export async function capturePostSubmitFlowReport(opts: {
   const matchedCreateFlow =
     expectedNewSummaries.find((s) => s.matchedExpected) ||
     summaries.find((s) => s.matchedExpected) ||
-    summaries.find((s) => /create\s*invoice/i.test(s.flowName)) ||
+    summaries.find((s) => parentNameRe.test(s.flowName)) ||
     expectedLatestSummary;
 
   const expectedFlow = expectedFlows[0]
@@ -649,7 +788,7 @@ export async function capturePostSubmitFlowReport(opts: {
   }
   if (!expectedNewRuns.length && readable) {
     notes.push(
-      'No new Create Invoice NA flowrun after this Submit — reporting latest catalog run + other new runs.'
+      `No new ${action === 'Update' ? 'Update' : 'Create'} Invoice flowrun after this ${action} — reporting latest catalog run + other new runs.`
     );
   }
   if (networkHitCount > 0) {

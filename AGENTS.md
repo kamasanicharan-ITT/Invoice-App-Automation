@@ -7,12 +7,11 @@ Invoice app to raise invoices for their projects.
 
 ## Where things live
 
-- `tests/` — Playwright specs (`*.spec.ts`). UI structure + Dataverse data validation.
+- `tests/` — Playwright specs (`*.spec.ts`). One file per screen: `dashboard-screen`, `create-invoice-screen`, `invoice-overview-screen`, plus `smoke` and `seed`.
 - `config/env.ts` — multi-env map (`ENV=dev|sit|qa|uat`); app + Dataverse URLs; auth paths.
-- `specs/` — Test plans (markdown) produced by the planner workflow.
+- `specs/` — Screen plans, Excel source sheets, setup/phase2 docs, Dataverse schema and flow names.
 - `tests/seed.spec.ts` — template used when generating a new test. Do not edit manually.
 - `playwright.config.ts` — headless off, role projects, `ENV`-aware storageState, retries 1.
-- Exploration specs (schema/explorer/flow-tracking) are `testIgnore`d by default.
 
 ## Cursor configuration
 

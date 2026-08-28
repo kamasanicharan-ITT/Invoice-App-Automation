@@ -25,17 +25,14 @@ Generated specs begin with the plan + seed reference comments:
 
 ## Naming
 
-- Test IDs: `TC-<AREA>-<NN>` (e.g. `TC-DB-01` dashboard UI, `TC-DV-01` Dataverse validation).
-- `describe` matches the top-level plan item (e.g. `Dashboard Screen`).
-- Generated test title matches the scenario name; one test per generated file.
-- Include a comment with the plan step text before each step execution.
+- Test IDs: `TC-DB-*` / `TC-DV-*` (Dashboard), `CI-*` / `TC-CI-*` / `TC-CIF-*` (Create Invoice), `TC-IO-*` / `IO-*` (Overview).
+- `describe` matches the screen (`Dashboard Screen`, `Create Invoice Screen`, `Invoice Overview Screen`).
+- One spec file per screen: `tests/dashboard-screen.spec.ts`, `create-invoice-screen.spec.ts`, `invoice-overview-screen.spec.ts`.
 
 ## Helper functions (reuse; do not reinvent)
 
 - `openDashboard(page)` — navigates to app URL, waits for `Dashboard`, returns `appFrame`.
-- `openCreateInvoice(page)` / Overview open helpers — same pattern; all call
-  `dismissHostDialogs` / `dismissHostDialogsSettling` from `tests/utils/host-dialogs.ts`
-  to click **Allow** on the intermittent Power Apps consent dialog and close host alerts.
+- `openCreateInvoice(page)` from `tests/utils/create-invoice-ui.ts`; `openInvoiceOverview(page)` from `tests/utils/invoice-overview-ui.ts`. Both dismiss host dialogs.
 - `getBillingCycleDates()` — returns `{ start, end }` ISO dates for the current billing cycle.
 - `getDataverseCount(token, filterExpression)` — calls Dataverse with filter, returns count.
 - `getDashboardTaskCount(page, appFrame, labelPattern)` — reads a numeric count from the

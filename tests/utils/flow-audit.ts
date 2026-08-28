@@ -82,27 +82,23 @@ const TERMINAL_STATUS =
  * Submitted or a Fail-*. Terminal status is the signal that the parent flow finished —
  * which also gives the lagging flowruns table time to land the parent run row.
  */
-export async function waitForSubmittedInvoice(opts: {
-  token: string;
-  projectId: string;
-  submitStartedAt: string;
-  timeoutMs?: number;
-}): Promise<{ row?: InvoiceRow; waitedMs: number; polls: number }> {
-  const timeoutMs = opts.timeoutMs ?? 120000;
-  const since = isoMinus(opts.submitStartedAt, 120000);
-  const filter = `_dia_projectid_value eq ${opts.projectId} and createdon ge ${since}`;
-  const query =
-    `dia_invoicedetailses?$filter=${encodeURIComponent(filter)}` +
-    `&$orderby=createdon desc&$top=5`;
+function odataString(value: string): string {
+  return value.replace(/'/g, "''");
+}
 
+async function pollInvoiceUntilTerminal(opts: {
+  token: string;
+  query: string;
+  timeoutMs: number;
+}): Promise<{ row?: InvoiceRow; waitedMs: number; polls: number }> {
   const started = Date.now();
   let polls = 0;
   let latest: InvoiceRow | undefined;
   let lastLogged = '';
 
-  while (Date.now() - started < timeoutMs) {
+  while (Date.now() - started < opts.timeoutMs) {
     polls++;
-    const res = await dvGet<{ value?: InvoiceRow[] }>(opts.token, query);
+    const res = await dvGet<{ value?: InvoiceRow[] }>(opts.token, opts.query);
     if (!res.ok) break;
     const rows = res.body?.value ?? [];
     if (rows.length) {
@@ -124,6 +120,68 @@ export async function waitForSubmittedInvoice(opts: {
   }
 
   return { row: latest, waitedMs: Date.now() - started, polls };
+}
+
+export async function waitForSubmittedInvoice(opts: {
+  token: string;
+  projectId: string;
+  submitStartedAt: string;
+  timeoutMs?: number;
+}): Promise<{ row?: InvoiceRow; waitedMs: number; polls: number }> {
+  return waitForInvoiceAfterAction({ ...opts, mode: 'create' });
+}
+
+/**
+ * Wait for the invoice this action wrote or updated. Create looks at `createdon`;
+ * Update looks at `modifiedon` (or a known id / invoice number) so flagged resubmit
+ * is not missed as a "new" row.
+ */
+export async function waitForInvoiceAfterAction(opts: {
+  token: string;
+  projectId?: string;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  submitStartedAt: string;
+  mode?: 'create' | 'update';
+  timeoutMs?: number;
+}): Promise<{ row?: InvoiceRow; waitedMs: number; polls: number }> {
+  const timeoutMs = opts.timeoutMs ?? 120000;
+  const since = isoMinus(opts.submitStartedAt, 120000);
+  const mode = opts.mode ?? (opts.invoiceId || opts.invoiceNumber ? 'update' : 'create');
+
+  if (opts.invoiceId) {
+    const guid = opts.invoiceId.replace(/[{}]/g, '');
+    return pollInvoiceUntilTerminal({
+      token: opts.token,
+      query: `dia_invoicedetailses?$filter=${encodeURIComponent(`dia_invoicedetailsid eq ${guid}`)}&$top=1`,
+      timeoutMs,
+    });
+  }
+
+  if (opts.invoiceNumber) {
+    const filter = `dia_invoicenumber eq '${odataString(opts.invoiceNumber)}'`;
+    return pollInvoiceUntilTerminal({
+      token: opts.token,
+      query:
+        `dia_invoicedetailses?$filter=${encodeURIComponent(filter)}` +
+        `&$orderby=modifiedon desc&$top=5`,
+      timeoutMs,
+    });
+  }
+
+  if (!opts.projectId) {
+    return { waitedMs: 0, polls: 0 };
+  }
+
+  const stamp = mode === 'update' ? 'modifiedon' : 'createdon';
+  const filter = `_dia_projectid_value eq ${opts.projectId} and ${stamp} ge ${since}`;
+  return pollInvoiceUntilTerminal({
+    token: opts.token,
+    query:
+      `dia_invoicedetailses?$filter=${encodeURIComponent(filter)}` +
+      `&$orderby=${stamp} desc&$top=5`,
+    timeoutMs,
+  });
 }
 
 async function probe(
@@ -202,21 +260,28 @@ function buildStatusTimeline(auditRows: unknown[]): InvoiceAuditReport['statusTi
 export async function captureInvoiceAudit(opts: {
   token: string;
   testInfo: TestInfo;
-  projectId: string;
+  projectId?: string;
   projectName: string;
   partnerName: string;
   submitStartedAt: string;
   expectedWorkflowId?: string;
   matchedRunId?: string;
   invoiceWaitMs?: number;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  mode?: 'create' | 'update';
 }): Promise<InvoiceAuditReport> {
   const { token } = opts;
   const sources: AuditSource[] = [];
+  const mode = opts.mode ?? (opts.invoiceId || opts.invoiceNumber ? 'update' : 'create');
 
-  const waited = await waitForSubmittedInvoice({
+  const waited = await waitForInvoiceAfterAction({
     token,
     projectId: opts.projectId,
+    invoiceId: opts.invoiceId,
+    invoiceNumber: opts.invoiceNumber,
     submitStartedAt: opts.submitStartedAt,
+    mode,
     timeoutMs: opts.invoiceWaitMs ?? 120000,
   });
   const row = waited.row;
@@ -224,13 +289,19 @@ export async function captureInvoiceAudit(opts: {
 
   sources.push({
     source: 'Invoice row (dia_invoicedetailses)',
-    endpoint: `dia_invoicedetailses?$filter=_dia_projectid_value eq ${opts.projectId} and createdon ge ...`,
+    endpoint: opts.invoiceId
+      ? `dia_invoicedetailses(${opts.invoiceId})`
+      : opts.invoiceNumber
+        ? `dia_invoicedetailses?$filter=dia_invoicenumber eq '${opts.invoiceNumber}'`
+        : `dia_invoicedetailses?$filter=_dia_projectid_value eq ${opts.projectId ?? '(none)'} and ${mode === 'update' ? 'modifiedon' : 'createdon'} ge ...`,
     ok: !!row,
     status: row ? 200 : 404,
     count: row ? 1 : 0,
     note: row
       ? `resolved in ${waited.waitedMs}ms over ${waited.polls} poll(s); ${Object.keys(row).length} columns`
-      : 'no invoice row created for this project after Submit',
+      : mode === 'update'
+        ? 'no invoice row updated for this project after Submit'
+        : 'no invoice row created for this project after Submit',
     sample: row ? [row] : [],
   });
 
@@ -414,6 +485,9 @@ async function attachAuditReport(
     `- Project: **${opts.partnerName} / ${opts.projectName}**`,
     `- Submit started: ${opts.submitStartedAt}`,
     `- Invoice row resolved: **${report.invoiceFound ? 'YES' : 'NO'}** (waited ${report.waitedMs}ms)`,
+    report.invoice?.status && /^Fail-/i.test(report.invoice.status)
+      ? `- **FLOW/INVOICE FAILURE:** status landed on **${report.invoice.status}**`
+      : '',
     '',
     '## Invoice record',
     inv

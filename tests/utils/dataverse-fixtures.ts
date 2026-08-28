@@ -2,6 +2,7 @@
  * Dataverse fixture helpers for Create Invoice (Bearer token + OData Web API).
  * Discovers partners/projects/contracts in the active ENV's Dataverse — no hardcoded seed names.
  */
+import fs from 'node:fs';
 import { request, type Browser, type Request } from '@playwright/test';
 import { APP_URL, DATAVERSE_URL, env } from '../../config/env';
 
@@ -29,6 +30,8 @@ export type ProductFixture = {
   rate?: number | null;
 };
 
+export type CreateInvoicePersona = 'admin' | 'pm';
+
 export type CreateInvoiceFixtures = {
   /** Active project+1 contract with no non-adhoc invoice in the duplicate window. */
   eligibleNonAdhoc: ProjectFixture | null;
@@ -48,8 +51,11 @@ export type CreateInvoiceFixtures = {
   noFourthMonthCoverage: ProjectFixture | null;
   /** Project with 2+ Active contracts covering the default invoice date (CI-014). */
   multiActiveContract: ProjectFixture | null;
-  /** Unimind / Cursor Test when present — preferred seed for multi-contract checks. */
-  cursorTest: ProjectFixture | null;
+  /**
+   * Covering contract still active on the 4th-month start (CI-005 / 011 / 012 / 051).
+   * Discovered from Dataverse, never a named seed.
+   */
+  coversFourthMonth: ProjectFixture | null;
   editableProduct: ProductFixture | null;
   nonEditableProduct: ProductFixture | null;
 };
@@ -102,17 +108,106 @@ export function getDuplicateCheckWindow(reference = new Date()): { start: string
   return { start, end };
 }
 
+function odataEscape(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function normGuid(id: string): string {
+  return id.replace(/[{}]/g, '').toLowerCase();
+}
+
+function storageStateForPersona(persona: CreateInvoicePersona): string | undefined {
+  const candidates =
+    persona === 'pm'
+      ? [env.authPm, 'auth/pm.json']
+      : [env.authAdmin, 'auth/admin.json', 'auth.json'];
+  return candidates.find((p) => fs.existsSync(p));
+}
+
+/**
+ * PM Create Invoice scope matches Canvas involvement:
+ * project Submitter, Approvers mail list, or Internal Reviewers mail list.
+ * Admin is org-wide (empty set means "no filter").
+ */
+export async function resolvePersonaProjectIds(
+  token: string,
+  persona: CreateInvoicePersona
+): Promise<Set<string> | undefined> {
+  if (persona === 'admin') return undefined;
+
+  const api = await request.newContext();
+  try {
+    const whoRes = await api.get(`${DATAVERSE_URL}/api/data/v9.2/WhoAmI`, {
+      headers: ODATA_HEADERS(token),
+    });
+    if (!whoRes.ok()) {
+      console.log('WhoAmI failed for PM fixture scope:', (await whoRes.text()).slice(0, 200));
+      return new Set();
+    }
+    const userId = String((await whoRes.json()).UserId ?? '');
+    const userRes = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/systemusers(${userId})?$select=fullname,internalemailaddress`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    const user = userRes.ok() ? await userRes.json() : {};
+    const email = String(user.internalemailaddress ?? '');
+    const fullname = String(user.fullname ?? '');
+    if (!email) {
+      console.log('PM system user has no internalemailaddress; no in-scope projects');
+      return new Set();
+    }
+
+    const projects = new Set<string>();
+    const esc = odataEscape(email);
+
+    const projRes = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_projects?$filter=${encodeURIComponent(
+        `contains(dia_submitter,'${esc}')`
+      )}&$select=dia_projectid&$top=200`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (projRes.ok()) {
+      for (const row of (await projRes.json()).value ?? []) {
+        if (row.dia_projectid) projects.add(normGuid(String(row.dia_projectid)));
+      }
+    } else {
+      console.log('PM submitter project lookup failed:', (await projRes.text()).slice(0, 150));
+    }
+
+    const mlFilter =
+      `contains(dia_approverslist,'${esc}') or contains(dia_internalreviewerslist,'${esc}')`;
+    const mlRes = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_invoicemaillists?$filter=${encodeURIComponent(
+        mlFilter
+      )}&$select=_dia_projectid_value&$top=200`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (mlRes.ok()) {
+      for (const row of (await mlRes.json()).value ?? []) {
+        if (row._dia_projectid_value) projects.add(normGuid(String(row._dia_projectid_value)));
+      }
+    } else {
+      console.log('PM mail-list project lookup failed:', (await mlRes.text()).slice(0, 150));
+    }
+
+    console.log(
+      `Create Invoice PM scope: ${fullname} <${email}> → ${projects.size} project(s)`
+    );
+    return projects;
+  } finally {
+    await api.dispose();
+  }
+}
+
 export async function captureDataverseToken(
   browser: Browser,
-  appUrl: string = APP_URL
+  appUrl: string = APP_URL,
+  persona: CreateInvoicePersona = 'admin'
 ): Promise<string> {
   const { expect } = await import('@playwright/test');
-  // Prefer env authAdmin (auth/<env>/admin.json); fall back to legacy auth.json / auth/admin.json
-  const fs = await import('node:fs');
-  const authCandidates = [env.authAdmin, 'auth/admin.json', 'auth.json'];
-  const storageState = authCandidates.find((p) => fs.existsSync(p));
+  const storageState = storageStateForPersona(persona);
   if (!storageState) {
-    console.log('No admin storageState found for token capture:', authCandidates.join(', '));
+    console.log(`No ${persona} storageState found for token capture`);
     return '';
   }
   // Explicit storageState — browser.newPage() alone does not inherit config use.storageState
@@ -245,24 +340,47 @@ type ContractRow = {
 async function fetchActiveContractsCoveringDate(
   token: string,
   invoiceDateYmd: string,
-  top = 80
+  projectIds?: Set<string>,
+  top = 200
 ): Promise<ContractRow[]> {
+  if (projectIds && projectIds.size === 0) return [];
+
   const api = await request.newContext();
-  const filter = encodeURIComponent(
-    `statecode eq 0 and ittdev_startdate le ${invoiceDateYmd} and ittdev_enddate ge ${invoiceDateYmd}`
-  );
-  const res = await api.get(
-    `${DATAVERSE_URL}/api/data/v9.2/ittdev_contracts?$filter=${filter}` +
-      `&$select=ittdev_contractid,ittdev_name,_ittdev_dia_project_value,ittdev_startdate,ittdev_enddate` +
-      `&$expand=ittdev_dia_Project($select=dia_projectid,dia_projectname,dia_projectstatus,_ittdev_account_value,ittdev_region)` +
-      `&$top=${top}`,
-    { headers: ODATA_HEADERS(token) }
-  );
-  if (!res.ok()) {
-    console.log('Contract query failed:', (await res.text()).slice(0, 400));
-    return [];
+  try {
+    const dateClause = `statecode eq 0 and ittdev_startdate le ${invoiceDateYmd} and ittdev_enddate ge ${invoiceDateYmd}`;
+    const chunks: string[][] = [];
+    if (projectIds) {
+      const ids = [...projectIds];
+      const size = 15;
+      for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
+    } else {
+      chunks.push([]);
+    }
+
+    const rows: ContractRow[] = [];
+    for (const chunk of chunks) {
+      const projectClause =
+        chunk.length > 0
+          ? ` and (${chunk.map((id) => `_ittdev_dia_project_value eq ${id}`).join(' or ')})`
+          : '';
+      const filter = encodeURIComponent(`${dateClause}${projectClause}`);
+      const res = await api.get(
+        `${DATAVERSE_URL}/api/data/v9.2/ittdev_contracts?$filter=${filter}` +
+          `&$select=ittdev_contractid,ittdev_name,_ittdev_dia_project_value,ittdev_startdate,ittdev_enddate` +
+          `&$expand=ittdev_dia_Project($select=dia_projectid,dia_projectname,dia_projectstatus,_ittdev_account_value,ittdev_region)` +
+          `&$top=${top}`,
+        { headers: ODATA_HEADERS(token) }
+      );
+      if (!res.ok()) {
+        console.log('Contract query failed:', (await res.text()).slice(0, 400));
+        continue;
+      }
+      rows.push(...((await res.json()).value ?? []));
+    }
+    return rows;
+  } finally {
+    await api.dispose();
   }
-  return (await res.json()).value ?? [];
 }
 
 export type ContractOption = {
@@ -430,8 +548,10 @@ export async function findProjectByName(
 
 /** Active project that has zero Active contracts (may still have Inactive rows). */
 export async function findProjectWithNoActiveContract(
-  token: string
+  token: string,
+  allowedProjectIds?: Set<string>
 ): Promise<ProjectFixture | null> {
+  if (allowedProjectIds && allowedProjectIds.size === 0) return null;
   const api = await request.newContext();
   try {
     const contractRes = await api.get(
@@ -444,7 +564,7 @@ export async function findProjectWithNoActiveContract(
       for (const r of ((await contractRes.json()).value ?? []) as {
         _ittdev_dia_project_value?: string;
       }[]) {
-        if (r._ittdev_dia_project_value) withActive.add(r._ittdev_dia_project_value);
+        if (r._ittdev_dia_project_value) withActive.add(normGuid(r._ittdev_dia_project_value));
       }
     }
 
@@ -470,7 +590,9 @@ export async function findProjectWithNoActiveContract(
     for (const row of rows) {
       if (!row.dia_projectid || !row.dia_projectname) continue;
       if (row.dia_projectstatus && String(row.dia_projectstatus) !== 'Active') continue;
-      if (withActive.has(row.dia_projectid)) continue;
+      const pid = normGuid(row.dia_projectid);
+      if (allowedProjectIds && !allowedProjectIds.has(pid)) continue;
+      if (withActive.has(pid)) continue;
       const partnerName = await resolveAccountName(token, row._ittdev_account_value);
       if (!partnerName) continue;
       return {
@@ -478,6 +600,26 @@ export async function findProjectWithNoActiveContract(
         projectName: row.dia_projectname.trim(),
         projectId: row.dia_projectid,
       };
+    }
+
+    if (allowedProjectIds) {
+      for (const pid of allowedProjectIds) {
+        if (withActive.has(pid)) continue;
+        const one = await api.get(
+          `${DATAVERSE_URL}/api/data/v9.2/dia_projects(${pid})?$select=dia_projectid,dia_projectname,_ittdev_account_value,dia_projectstatus`,
+          { headers: ODATA_HEADERS(token) }
+        );
+        if (!one.ok()) continue;
+        const row = await one.json();
+        if (row.dia_projectstatus && String(row.dia_projectstatus) !== 'Active') continue;
+        const partnerName = await resolveAccountName(token, row._ittdev_account_value);
+        if (!partnerName) continue;
+        return {
+          partnerName,
+          projectName: String(row.dia_projectname ?? '').trim(),
+          projectId: row.dia_projectid,
+        };
+      }
     }
     return null;
   } finally {
@@ -681,7 +823,7 @@ export async function listProjectsWithActiveContractsByRegion(
   const limit = opts.limit ?? 12;
   const { end } = getBillingCycleDates();
   const invoiceDate = end.slice(0, 10);
-  const contracts = await fetchActiveContractsCoveringDate(token, invoiceDate, 200);
+  const contracts = await fetchActiveContractsCoveringDate(token, invoiceDate);
   const byProject = groupContractsByProject(contracts);
   const needle = regionLabel.toLowerCase();
   const found: ProjectFixture[] = [];
@@ -838,18 +980,24 @@ export async function countInvoicesForProject(
 
 /**
  * Load Create Invoice fixtures after token capture.
- * Resolves one project per role directly from Dataverse (no UI retry lists).
+ * Admin: any active project matching the role (org-wide).
+ * PM: only projects where this user is Submitter / Reviewer / Approver.
+ * Never looks up named DEV seeds.
  */
 export async function loadCreateInvoiceFixtures(
-  token: string
+  token: string,
+  options: { persona?: CreateInvoicePersona } = {}
 ): Promise<CreateInvoiceFixtures> {
+  const persona = options.persona ?? 'admin';
+  const allowedProjectIds = await resolvePersonaProjectIds(token, persona);
   const last = getLastBillingCycleDates();
   const dupWindow = getDuplicateCheckWindow();
   const { end: invoiceDateIso } = getBillingCycleDates();
   const invoiceDate = invoiceDateIso.slice(0, 10);
+  const fourthStart = fourthMonthStartYmd();
 
   const [contracts, editableProduct, nonEditableProduct] = await Promise.all([
-    fetchActiveContractsCoveringDate(token, invoiceDate),
+    fetchActiveContractsCoveringDate(token, invoiceDate, allowedProjectIds),
     findProduct(token, 'Editable Rate'),
     findProduct(token, 'Non-Editable Rate'),
     loadRegionOptionLabels(token),
@@ -864,6 +1012,7 @@ export async function loadCreateInvoiceFixtures(
   let nonNorthAmerica: ProjectFixture | null = null;
   let noFourthMonthCoverage: ProjectFixture | null = null;
   let multiActiveContract: ProjectFixture | null = null;
+  let coversFourthMonth: ProjectFixture | null = null;
   const firstBlockedYmd = firstBlockedCapYmd();
 
   const now = new Date();
@@ -871,6 +1020,7 @@ export async function loadCreateInvoiceFixtures(
   const calPrevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
 
   for (const [projectId, list] of byProject) {
+    if (allowedProjectIds && !allowedProjectIds.has(normGuid(projectId))) continue;
     const project = list[0]?.ittdev_dia_Project;
     if (!isActiveProject(project)) continue;
 
@@ -880,7 +1030,6 @@ export async function loadCreateInvoiceFixtures(
         (await resolveProjectRegion(token, projectId)) ??
         '';
       const regionLower = region.toLowerCase();
-      // Prefer region fixtures that will not raise Duplicate Project! on select
       const hasBlocking =
         list.length === 1
           ? await projectHasInvoiceInWindow(token, projectId, dupWindow.start, dupWindow.end, {
@@ -931,6 +1080,12 @@ export async function loadCreateInvoiceFixtures(
       }
     }
 
+    const coversFourth = list.some((c) => (c.ittdev_enddate?.slice(0, 10) ?? '') >= fourthStart);
+    if (coversFourth && !coversFourthMonth) {
+      const picked = await toProjectFixture(token, projectId, list);
+      if (picked) coversFourthMonth = picked;
+    }
+
     if (list.length === 1) {
       const hasBlocking = await projectHasInvoiceInWindow(
         token,
@@ -952,8 +1107,6 @@ export async function loadCreateInvoiceFixtures(
           noFourthMonthCoverage = short;
         }
       }
-      // Prefill source must be selectable without the Duplicate Project! popup,
-      // and its previous invoice must actually carry line items to copy.
       if (!hasBlocking && !withLastInvoice) {
         const snapshot = await fetchLastInvoiceWithLines(token, projectId);
         if (snapshot && snapshot.lines.length > 0) {
@@ -970,29 +1123,14 @@ export async function loadCreateInvoiceFixtures(
       northAmerica &&
       nonNorthAmerica &&
       noFourthMonthCoverage &&
-      multiActiveContract
+      multiActiveContract &&
+      coversFourthMonth
     ) {
       break;
     }
   }
 
-  const [noActiveContract, cursorTest] = await Promise.all([
-    findProjectWithNoActiveContract(token),
-    findProjectByName(token, 'Cursor Test'),
-  ]);
-
-  if (cursorTest) {
-    const covering = (await listActiveContractsForProject(token, cursorTest.projectId)).filter(
-      (c) => c.coversInvoiceDate
-    );
-    if (covering.length >= 2) {
-      multiActiveContract = {
-        ...cursorTest,
-        contractId: covering[0].contractId,
-        contractName: covering[0].name,
-      };
-    }
-  }
+  const noActiveContract = await findProjectWithNoActiveContract(token, allowedProjectIds);
 
   return {
     eligibleNonAdhoc,
@@ -1004,16 +1142,19 @@ export async function loadCreateInvoiceFixtures(
     noActiveContract,
     noFourthMonthCoverage,
     multiActiveContract,
-    cursorTest,
+    coversFourthMonth,
     editableProduct,
     nonEditableProduct,
   };
 }
 
-export function logFixtures(fixtures: CreateInvoiceFixtures): void {
+export function logFixtures(
+  fixtures: CreateInvoiceFixtures,
+  persona: CreateInvoicePersona = 'admin'
+): void {
   const fmt = (p: ProjectFixture | null) =>
     p ? `${p.partnerName} / ${p.projectName}${p.region ? ` [${p.region}]` : ''}` : 'NONE';
-  console.log('Create Invoice fixtures:');
+  console.log(`Create Invoice fixtures (${persona}):`);
   console.log('  eligibleNonAdhoc (no duplicate):', fmt(fixtures.eligibleNonAdhoc));
   console.log('  duplicateNonAdhoc:', fmt(fixtures.duplicateNonAdhoc));
   console.log('  noLastMonthInvoice:', fmt(fixtures.noLastMonthInvoice));
@@ -1023,7 +1164,7 @@ export function logFixtures(fixtures: CreateInvoiceFixtures): void {
   console.log('  noActiveContract:', fmt(fixtures.noActiveContract));
   console.log('  noFourthMonthCoverage:', fmt(fixtures.noFourthMonthCoverage));
   console.log('  multiActiveContract:', fmt(fixtures.multiActiveContract));
-  console.log('  cursorTest:', fmt(fixtures.cursorTest));
+  console.log('  coversFourthMonth:', fmt(fixtures.coversFourthMonth));
   console.log('  editableProduct:', fixtures.editableProduct?.name ?? 'NONE');
   console.log('  nonEditableProduct:', fixtures.nonEditableProduct?.name ?? 'NONE');
 }

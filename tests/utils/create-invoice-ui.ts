@@ -4,7 +4,7 @@
  */
 import { expect, type Page, type FrameLocator, type Locator, type TestInfo } from '@playwright/test';
 import { dismissHostDialogs, dismissHostDialogsSettling } from './host-dialogs';
-import { APP_URL, type ProjectFixture } from './dataverse-fixtures';
+import { APP_URL, type ContractOption, type ProjectFixture } from './dataverse-fixtures';
 
 export const LINE_DESCRIPTION = 'Automation line item — Create Invoice regression';
 
@@ -23,6 +23,8 @@ export const DUPLICATE = {
 } as const;
 
 export const CONTRACT_WARNING = /contract/i;
+
+export const CONTRACT_MODAL_TITLE = 'Please select the Contract.';
 
 export type ProjectSelectOutcome = 'duplicate' | 'no-last-invoice' | 'clear';
 export type Persona = 'admin' | 'pm';
@@ -63,27 +65,6 @@ export function threeMonthCapUsDates(reference = new Date()): {
 export function fourthMonthStartUsDate(reference = new Date()): string {
   return formatUsDate(new Date(reference.getFullYear(), reference.getMonth() + 4, 1));
 }
-
-export const CURSOR_TEST: ProjectFixture = {
-  partnerName: 'Unimind',
-  projectName: 'Cursor Test',
-  projectId: '',
-};
-
-/** Unimind project used for junk-search steps (live 2026-08-25). */
-export const UNIMIND_FOUR_MONTHS: ProjectFixture = {
-  partnerName: 'Unimind',
-  projectName: '4 months',
-  projectId: '',
-};
-
-/** PM-visible Unimind projects seeded for Rashwanth on DEV. */
-export const PM_UNIMIND_PROJECTS: ProjectFixture[] = [
-  { partnerName: 'Unimind', projectName: 'Test for PM', projectId: '' },
-  { partnerName: 'Unimind', projectName: 'Test for PM 1', projectId: '' },
-  { partnerName: 'Unimind', projectName: 'Test for PM 2', projectId: '' },
-  { partnerName: 'Unimind', projectName: 'Future Creation Test for PM', projectId: '' },
-];
 
 export async function acceptContractIfPrompted(appFrame: FrameLocator): Promise<void> {
   const findContract = appFrame.getByRole('button', { name: 'Find Contract' });
@@ -736,4 +717,73 @@ export async function fillValidLine(
     qty: '2',
     rate: '100',
   });
+}
+
+export async function contractModalOpen(appFrame: FrameLocator): Promise<boolean> {
+  const title = appFrame.getByText(CONTRACT_MODAL_TITLE, { exact: true });
+  const findContract = appFrame.getByRole('button', { name: 'Find Contract' });
+  return (
+    (await title.isVisible().catch(() => false)) ||
+    (await findContract.isVisible().catch(() => false))
+  );
+}
+
+/**
+ * Multi-contract projects open a modal after Project OnChange.
+ * Pass Active contracts so a project with more than one requires the modal.
+ */
+export async function selectContractIfPrompted(
+  appFrame: FrameLocator,
+  opts: { contracts?: ContractOption[]; label?: string } = {}
+): Promise<string | null> {
+  const contracts = opts.contracts ?? [];
+  const expectModal = contracts.length > 1;
+  const title = appFrame.getByText(CONTRACT_MODAL_TITLE, { exact: true });
+  const findContract = appFrame.getByRole('button', { name: 'Find Contract' });
+
+  if (expectModal) {
+    await expect(
+      title.or(findContract).first(),
+      `Project has ${contracts.length} Active contracts, so "${CONTRACT_MODAL_TITLE}" must appear`
+    ).toBeVisible({ timeout: 30000 });
+  } else if (!(await contractModalOpen(appFrame))) {
+    return null;
+  }
+
+  await expect(findContract).toBeVisible({ timeout: 15000 });
+  await findContract.click();
+  await expect(appFrame.getByRole('option').first()).toBeVisible({ timeout: 20000 });
+
+  const options = appFrame.getByRole('option');
+  const names = (await options.allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+  const preferred = contracts.filter((c) => c.coversInvoiceDate).map((c) => c.name);
+  const order = [
+    ...names.filter((n) => preferred.some((p) => p && n.toLowerCase() === p.toLowerCase())),
+    ...names.filter((n) => !preferred.some((p) => p && n.toLowerCase() === p.toLowerCase())),
+  ];
+
+  const ok = appFrame.getByRole('button', { name: 'Ok', exact: true });
+  let chosen = '';
+  for (const candidateName of order.length ? order : ['']) {
+    if ((await options.count()) === 0) {
+      await findContract.click();
+      await expect(options.first()).toBeVisible({ timeout: 15000 });
+    }
+    const option = candidateName
+      ? appFrame.getByRole('option', { name: candidateName, exact: true }).first()
+      : options.first();
+    if (!(await option.isVisible().catch(() => false))) continue;
+    chosen = ((await option.innerText()) || candidateName).trim();
+    await option.click();
+    if (await ok.isEnabled().catch(() => false)) break;
+    await expect(ok).toBeEnabled({ timeout: 5000 }).catch(() => undefined);
+    if (await ok.isEnabled().catch(() => false)) break;
+  }
+
+  await expect(ok).toBeEnabled({ timeout: 15000 });
+  await ok.click();
+  await expect(title).toBeHidden({ timeout: 20000 });
+  await expect(findContract).toBeHidden({ timeout: 20000 });
+  await expect(ok).toBeHidden({ timeout: 10000 }).catch(() => undefined);
+  return chosen || '(selected)';
 }
