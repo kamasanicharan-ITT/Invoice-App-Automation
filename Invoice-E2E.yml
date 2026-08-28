@@ -1,0 +1,60 @@
+# Invoice Canvas Playwright — manual E2E only.
+# Does not run on git push or PRs. After ApplicationComponents deploy + post-deploy,
+# open this pipeline → Run pipeline.
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: invoice-e2e-dev
+
+steps:
+  - checkout: self
+
+  - task: NodeTool@0
+    displayName: Use Node 20
+    inputs:
+      versionSpec: '20.x'
+
+  - task: DownloadSecureFile@1
+    name: adminAuth
+    displayName: Download Admin storageState
+    inputs:
+      secureFile: 'auth-dev-admin.json'
+
+  - script: |
+      set -e
+      mkdir -p auth/dev
+      cp "$(adminAuth.secureFilePath)" auth/dev/admin.json
+    displayName: Place auth/dev/admin.json
+
+  - script: npm ci
+    displayName: npm ci
+
+  - script: npx playwright install --with-deps chromium
+    displayName: Install Playwright Chromium
+
+  - script: npm run test:ci:smoke
+    displayName: Run Admin smoke
+    env:
+      ENV: $(ENV)
+      CI: $(CI)
+
+  - task: PublishTestResults@2
+    displayName: Publish JUnit results
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: '**/junit.xml'
+      mergeTestResults: true
+      testRunTitle: 'Invoice E2E $(ENV)'
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish HTML report
+    condition: always()
+    inputs:
+      targetPath: playwright-report
+      artifact: playwright-html-report
+      publishLocation: pipeline
