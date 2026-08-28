@@ -3,10 +3,11 @@
 //
 // Invoice Overview suite — Admin (you) vs PM (teammate).
 // Same shell for both; My Invoices / All Invoices radios are Admin-only.
+// TC-IO-20 / TC-IO-27: Review overlay (View Invoice) and header refresh — do not Flag / Mark as Reviewed.
 // Persona is inferred from Playwright project name (same pattern as dashboard.spec.ts).
 // URLs/auth come from config/env.ts (ENV=dev|sit|qa|uat).
 
-import { test, expect, type Page, type FrameLocator, type TestInfo } from '@playwright/test';
+import { test, expect, type Page, type FrameLocator, type Locator, type TestInfo } from '@playwright/test';
 import { APP_URL } from '../config/env';
 import { markGroupAndShot } from './utils/screenshot';
 import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
@@ -32,7 +33,14 @@ const REGIONS = [
   'UAE',
 ] as const;
 
-const INVOICE_NUMBER = /\d{4}-\d{4}/;
+const INVOICE_NUMBER = /\d{4}-\d{4}|INV-\d+/;
+
+async function clickIconRightOf(page: Page, label: Locator): Promise<void> {
+  await expect(label).toBeVisible();
+  const box = await label.boundingBox();
+  if (!box) throw new Error(`No bounding box for ${await label.textContent()}`);
+  await page.mouse.click(box.x + box.width + 18, box.y + box.height / 2);
+}
 
 type Persona = 'admin' | 'pm';
 
@@ -579,6 +587,78 @@ test.describe('Invoice Overview Screen', () => {
           appFrame.getByRole('button', { name: 'Submit' }),
         ],
         'Create Invoice opens New Invoice form',
+        testInfo
+      );
+    });
+  });
+
+  test('TC-IO-20: Review opens View Invoice with PDF and actions', async ({ page }, testInfo) => {
+    const appFrame = await openInvoiceOverview(page);
+    const review = appFrame.getByRole('button', { name: 'Review' });
+    test.skip((await review.count()) === 0, 'No Submitted invoice with Review on Overview');
+
+    await test.step('Open Review overlay', async () => {
+      await review.first().click();
+      await dismissHostDialogs(page);
+      await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible({
+        timeout: 45000,
+      });
+      await expect(appFrame.getByRole('button', { name: 'Flag' })).toBeVisible();
+      await expect(appFrame.getByRole('button', { name: 'Mark as Reviewed' })).toBeVisible();
+      await expect.soft(appFrame.getByText('Comments', { exact: true })).toBeVisible();
+      await expect
+        .soft(appFrame.getByText('Internal Notes (Hidden from Customer)', { exact: true }))
+        .toBeVisible();
+
+      const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
+      await expect(pdf.getByText(/Invoice|Partner Name/i).first()).toBeVisible({
+        timeout: 30000,
+      });
+
+      await markGroupAndShot(
+        page,
+        [
+          appFrame.getByText('View Invoice', { exact: true }),
+          appFrame.getByRole('button', { name: 'Flag' }),
+          appFrame.getByRole('button', { name: 'Mark as Reviewed' }),
+        ],
+        'View Invoice overlay',
+        testInfo
+      );
+    });
+
+    await test.step('Close without Flag or Mark as Reviewed', async () => {
+      await clickIconRightOf(page, appFrame.getByText('View Invoice', { exact: true }));
+      await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
+        timeout: 20000,
+      });
+      await expect(appFrame.getByRole('button', { name: 'Review' }).first()).toBeVisible();
+      await markGroupAndShot(
+        page,
+        [
+          appFrame.getByText('Show Invoices', { exact: true }),
+          appFrame.getByRole('button', { name: 'Review' }).first(),
+        ],
+        'Overview after closing Review',
+        testInfo
+      );
+    });
+  });
+
+  test('TC-IO-27: Refresh control is present on Overview', async ({ page }, testInfo) => {
+    const appFrame = await openInvoiceOverview(page);
+
+    await test.step('Click header refresh icon', async () => {
+      const title = appFrame.getByText('Invoice Overview', { exact: true }).first();
+      await expect(title).toBeVisible();
+      await clickIconRightOf(page, title);
+      await dismissHostDialogs(page);
+      await waitForOverviewSettled(appFrame);
+      await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible();
+      await markGroupAndShot(
+        page,
+        [title, appFrame.getByText('Show Invoices', { exact: true })],
+        'Overview after refresh',
         testInfo
       );
     });
