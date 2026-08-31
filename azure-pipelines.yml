@@ -25,9 +25,9 @@ parameters:
       - create-invoice
       - all-main
   - name: testGrep
-    displayName: Optional single-case filter (Playwright --grep). Leave blank to run the whole suite.
+    displayName: Single-case filter (Playwright --grep). Keep 'none' to run the whole suite.
     type: string
-    default: ''
+    default: 'none'
   - name: runPm
     displayName: Also run the same tests as PM (needs auth-<env>-pm.json)
     type: boolean
@@ -101,7 +101,7 @@ jobs:
               ;;
           esac
           echo "Admin suite=${SUITE} files=${FILES} grep='${GREP}'"
-          if [ -n "${GREP}" ]; then
+          if [ -n "${GREP}" ] && [ "${GREP}" != "none" ]; then
             npx playwright test ${FILES} --project=chromium-admin --retries=0 --grep "${GREP}"
           else
             npx playwright test ${FILES} --project=chromium-admin --retries=0
@@ -130,7 +130,7 @@ jobs:
                   ;;
               esac
               echo "PM suite=${SUITE} files=${FILES} grep='${GREP}'"
-              if [ -n "${GREP}" ]; then
+              if [ -n "${GREP}" ] && [ "${GREP}" != "none" ]; then
                 npx playwright test ${FILES} --project=chromium-pm --retries=0 --grep "${GREP}"
               else
                 npx playwright test ${FILES} --project=chromium-pm --retries=0
