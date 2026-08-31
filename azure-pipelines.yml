@@ -1,6 +1,6 @@
 # Invoice Canvas Playwright — manual E2E only.
 # Does not run on git push or PRs. After ApplicationComponents deploy + post-deploy:
-# Pipelines → Invoice-E2E → Run pipeline → pick Environment.
+# Pipelines → Invoice-E2E → Run pipeline → pick Environment + Tests to run.
 trigger: none
 pr: none
 
@@ -14,87 +14,147 @@ parameters:
       - qa
       - sit
       - uat
+  - name: testSuite
+    displayName: Tests to run
+    type: string
+    default: smoke
+    values:
+      - smoke
+      - dashboard
+      - overview
+      - create-invoice
+      - all-main
+  - name: testGrep
+    displayName: Optional single-case filter (Playwright --grep). Leave blank to run the whole suite.
+    type: string
+    default: ''
   - name: runPm
-    displayName: Also run PM smoke (needs auth-<env>-pm.json)
+    displayName: Also run the same tests as PM (needs auth-<env>-pm.json)
     type: boolean
     default: false
 
-pool:
-  vmImage: ubuntu-latest
+jobs:
+  - job: Playwright
+    timeoutInMinutes: 180
+    pool:
+      vmImage: ubuntu-latest
+    variables:
+      - group: invoice-e2e-${{ parameters.targetEnv }}
 
-variables:
-  - group: invoice-e2e-${{ parameters.targetEnv }}
+    steps:
+      - checkout: self
 
-steps:
-  - checkout: self
-
-  - task: NodeTool@0
-    displayName: Use Node 20
-    inputs:
-      versionSpec: '20.x'
-
-  - task: DownloadSecureFile@1
-    name: adminAuth
-    displayName: Download Admin storageState
-    inputs:
-      secureFile: 'auth-${{ parameters.targetEnv }}-admin.json'
-
-  - ${{ if eq(parameters.runPm, true) }}:
-      - task: DownloadSecureFile@1
-        name: pmAuth
-        displayName: Download PM storageState
+      - task: NodeTool@0
+        displayName: Use Node 20
         inputs:
-          secureFile: 'auth-${{ parameters.targetEnv }}-pm.json'
+          versionSpec: '20.x'
 
-  - script: |
-      set -e
-      mkdir -p "auth/${TARGET_ENV}"
-      cp "$(adminAuth.secureFilePath)" "auth/${TARGET_ENV}/admin.json"
-    displayName: Place auth/<env>/admin.json
-    env:
-      TARGET_ENV: ${{ parameters.targetEnv }}
+      - task: DownloadSecureFile@1
+        name: adminAuth
+        displayName: Download Admin storageState
+        inputs:
+          secureFile: 'auth-${{ parameters.targetEnv }}-admin.json'
 
-  - ${{ if eq(parameters.runPm, true) }}:
+      - ${{ if eq(parameters.runPm, true) }}:
+          - task: DownloadSecureFile@1
+            name: pmAuth
+            displayName: Download PM storageState
+            inputs:
+              secureFile: 'auth-${{ parameters.targetEnv }}-pm.json'
+
       - script: |
           set -e
           mkdir -p "auth/${TARGET_ENV}"
-          cp "$(pmAuth.secureFilePath)" "auth/${TARGET_ENV}/pm.json"
-        displayName: Place auth/<env>/pm.json
+          cp "$(adminAuth.secureFilePath)" "auth/${TARGET_ENV}/admin.json"
+        displayName: Place auth/<env>/admin.json
         env:
           TARGET_ENV: ${{ parameters.targetEnv }}
 
-  - script: npm ci
-    displayName: npm ci
+      - ${{ if eq(parameters.runPm, true) }}:
+          - script: |
+              set -e
+              mkdir -p "auth/${TARGET_ENV}"
+              cp "$(pmAuth.secureFilePath)" "auth/${TARGET_ENV}/pm.json"
+            displayName: Place auth/<env>/pm.json
+            env:
+              TARGET_ENV: ${{ parameters.targetEnv }}
 
-  - script: npx playwright install --with-deps chromium
-    displayName: Install Playwright Chromium
+      - script: npm ci
+        displayName: npm ci
 
-  - script: npm run test:ci:smoke
-    displayName: Run Admin smoke
-    env:
-      ENV: $(ENV)
-      CI: $(CI)
+      - script: npx playwright install --with-deps chromium
+        displayName: Install Playwright Chromium
 
-  - ${{ if eq(parameters.runPm, true) }}:
-      - script: npx playwright test tests/smoke.spec.ts --project=chromium-pm
-        displayName: Run PM smoke
+      - script: |
+          set -e
+          case "${SUITE}" in
+            smoke) FILES="tests/smoke.spec.ts" ;;
+            dashboard) FILES="tests/dashboard-screen.spec.ts" ;;
+            overview) FILES="tests/invoice-overview-screen.spec.ts" ;;
+            create-invoice) FILES="tests/create-invoice-screen.spec.ts" ;;
+            all-main)
+              FILES="tests/dashboard-screen.spec.ts tests/invoice-overview-screen.spec.ts tests/create-invoice-screen.spec.ts"
+              ;;
+            *)
+              echo "Unknown SUITE=${SUITE}"
+              exit 1
+              ;;
+          esac
+          echo "Admin suite=${SUITE} files=${FILES} grep='${GREP}'"
+          if [ -n "${GREP}" ]; then
+            npx playwright test ${FILES} --project=chromium-admin --retries=0 --grep "${GREP}"
+          else
+            npx playwright test ${FILES} --project=chromium-admin --retries=0
+          fi
+        displayName: Run Admin Playwright suite
         env:
           ENV: $(ENV)
           CI: $(CI)
+          SUITE: ${{ parameters.testSuite }}
+          GREP: ${{ parameters.testGrep }}
 
-  - task: PublishTestResults@2
-    displayName: Publish JUnit results
-    condition: always()
-    inputs:
-      testResultsFormat: JUnit
-      testResultsFiles: '**/junit.xml'
-      mergeTestResults: true
-      testRunTitle: 'Invoice E2E $(ENV)'
+      - ${{ if eq(parameters.runPm, true) }}:
+          - script: |
+              set -e
+              case "${SUITE}" in
+                smoke) FILES="tests/smoke.spec.ts" ;;
+                dashboard) FILES="tests/dashboard-screen.spec.ts" ;;
+                overview) FILES="tests/invoice-overview-screen.spec.ts" ;;
+                create-invoice) FILES="tests/create-invoice-screen.spec.ts" ;;
+                all-main)
+                  FILES="tests/dashboard-screen.spec.ts tests/invoice-overview-screen.spec.ts tests/create-invoice-screen.spec.ts"
+                  ;;
+                *)
+                  echo "Unknown SUITE=${SUITE}"
+                  exit 1
+                  ;;
+              esac
+              echo "PM suite=${SUITE} files=${FILES} grep='${GREP}'"
+              if [ -n "${GREP}" ]; then
+                npx playwright test ${FILES} --project=chromium-pm --retries=0 --grep "${GREP}"
+              else
+                npx playwright test ${FILES} --project=chromium-pm --retries=0
+              fi
+            displayName: Run PM Playwright suite
+            env:
+              ENV: $(ENV)
+              CI: $(CI)
+              SUITE: ${{ parameters.testSuite }}
+              GREP: ${{ parameters.testGrep }}
 
-  - task: PublishPipelineArtifact@1
-    displayName: Publish HTML report
-    condition: always()
-    inputs:
-      targetPath: playwright-report
-      artifact: playwright-html-report
-      publishLocation: pipeline
+      - task: PublishTestResults@2
+        displayName: Publish JUnit results
+        condition: always()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: '**/junit.xml'
+          mergeTestResults: true
+          testRunTitle: 'Invoice E2E $(ENV) ${{ parameters.testSuite }}'
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish HTML report
+        condition: always()
+        inputs:
+          targetPath: playwright-report
+          artifact: playwright-html-report
+          publishLocation: pipeline
