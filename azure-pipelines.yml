@@ -29,13 +29,13 @@ parameters:
     type: string
     default: ''
   - name: runPm
-    displayName: Also run PM smoke (needs auth-<env>-pm.json)
+    displayName: Also run the same tests as PM (needs auth-<env>-pm.json)
     type: boolean
     default: false
 
 jobs:
   - job: Playwright
-    timeoutInMinutes: 120
+    timeoutInMinutes: 180
     pool:
       vmImage: ubuntu-latest
     variables:
@@ -100,7 +100,7 @@ jobs:
               exit 1
               ;;
           esac
-          echo "Running suite=${SUITE} files=${FILES} grep='${GREP}'"
+          echo "Admin suite=${SUITE} files=${FILES} grep='${GREP}'"
           if [ -n "${GREP}" ]; then
             npx playwright test ${FILES} --project=chromium-admin --retries=0 --grep "${GREP}"
           else
@@ -114,11 +114,33 @@ jobs:
           GREP: ${{ parameters.testGrep }}
 
       - ${{ if eq(parameters.runPm, true) }}:
-          - script: npx playwright test tests/smoke.spec.ts --project=chromium-pm
-            displayName: Run PM smoke
+          - script: |
+              set -e
+              case "${SUITE}" in
+                smoke) FILES="tests/smoke.spec.ts" ;;
+                dashboard) FILES="tests/dashboard-screen.spec.ts" ;;
+                overview) FILES="tests/invoice-overview-screen.spec.ts" ;;
+                create-invoice) FILES="tests/create-invoice-screen.spec.ts" ;;
+                all-main)
+                  FILES="tests/dashboard-screen.spec.ts tests/invoice-overview-screen.spec.ts tests/create-invoice-screen.spec.ts"
+                  ;;
+                *)
+                  echo "Unknown SUITE=${SUITE}"
+                  exit 1
+                  ;;
+              esac
+              echo "PM suite=${SUITE} files=${FILES} grep='${GREP}'"
+              if [ -n "${GREP}" ]; then
+                npx playwright test ${FILES} --project=chromium-pm --retries=0 --grep "${GREP}"
+              else
+                npx playwright test ${FILES} --project=chromium-pm --retries=0
+              fi
+            displayName: Run PM Playwright suite
             env:
               ENV: $(ENV)
               CI: $(CI)
+              SUITE: ${{ parameters.testSuite }}
+              GREP: ${{ parameters.testGrep }}
 
       - task: PublishTestResults@2
         displayName: Publish JUnit results
