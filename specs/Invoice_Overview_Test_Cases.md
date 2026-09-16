@@ -181,84 +181,99 @@
 
 ## IO-016 — Partner column sorts ascending then descending
 - **Module:** Sort
-- **User Role:** PM / BDU
-- **Preconditions:** Multiple invoices with different partners exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** Multiple invoices with different partners in the active period
+- **Live-locked (DEV 15 Sep 2026):** Header starts with **down** arrow + funnel. Click the **arrow** (not the funnel). Control: `icnPartnerDownInvoiceOverview`.
 - **Steps:**
-  1. Click Partner column header
-  2. Observe sort order
-  3. Click again
-- **Expected Result:** First click sorts A-Z, second click sorts Z-A
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Two-state toggle-sort test — automation should read the full Partner column values before/after each click and assert strict alphabetical ordering both directions.
+  1. Open Invoice Overview → This Month (gallery must have ≥2 distinct partners; else fail with seed message)
+  2. Record Partner values in gallery order
+  3. Click Partner **sort arrow** once → expect A→Z (e.g. HP Inc. before Unimind)
+  4. Click Partner **sort arrow** again → expect Z→A
+- **Expected Result:** Toggle A→Z then Z→A (does **not** clear back to default order)
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Assert partner column string order after each click. Icons are unlabeled `powerapps-icon`; prefer `data-control-name` in helpers only if stable, else click by position to the right of the Partner label (arrow left of funnel).
 
 ## IO-017 — Project column sorts correctly
 - **Module:** Sort
-- **User Role:** PM / BDU
-- **Preconditions:** Multiple invoices with different projects exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** Multiple invoices with different project names
+- **Live-locked:** Same pattern as Partner — down arrow + funnel (`icnProjectDownInvoiceOverview` / `icnProjectFilterInvoiceOverview`).
 - **Steps:**
-  1. Click Project column header
-  2. Observe sort order
-- **Expected Result:** Invoice list sorts by project name
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Same sort pattern as IO-016 applied to the Project column.
+  1. Click Project **sort arrow** once → A→Z by project name
+  2. Click again → Z→A
+- **Expected Result:** Same ASC↔DESC toggle as Partner
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Same sort pattern as IO-016 on Project.
 
 ## IO-018 — Invoice # column sorts correctly
 - **Module:** Sort
-- **User Role:** PM / BDU
-- **Preconditions:** Multiple invoices with invoice numbers exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** Multiple rows with invoice numbers (blank # rows may sort to ends — assert on numbered rows)
+- **Live-locked:** **Arrow only** (no funnel). Control: `icnInvoiceDownInvoiceOverview`.
 - **Steps:**
-  1. Click Invoice # column header
-  2. Observe sort order
-- **Expected Result:** Invoice list sorts by invoice number
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Sort test for Invoice # — worth checking whether sort is numeric or string-based, since invoice numbers include a year prefix (e.g. "2026-0265") which sorts differently under each scheme.
+  1. Click Invoice # arrow once → low→high (e.g. `2026-0176` … before `2026-0448`)
+  2. Click again → high→low
+  3. Click again → low→high again (ASC↔DESC toggle)
+- **Expected Result:** String/numeric year-prefix order toggles ASC↔DESC; does **not** restore original unsorted order
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Live confirmed ASC then DESC then ASC. Not a clear-to-default control.
 
 ## IO-019 — Status column sorts correctly
 - **Module:** Sort
-- **User Role:** PM / BDU
-- **Preconditions:** Invoices with different statuses exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** Mixed statuses visible (at least Draft + Submitted)
+- **Live-locked:** Down arrow + funnel. Control: `icnStatusDownInvoiceOverview`. First click = **small→big (A→Z)** — Drafts cluster before Submitted/Flagged; second click = reverse (Z→A, e.g. Submitted first). Not lifecycle “highest priority” order.
 - **Steps:**
-  1. Click Status column header
-  2. Observe sort order
-- **Expected Result:** Invoice list sorts by status value
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Sort test for the Status column — clarify with the app owner whether this is alphabetical or a custom lifecycle-order sort (Draft → Submitted → Reviewed → Approved → Sent), since that affects the expected assertion.
+  1. Note default mixed order (arrow points down)
+  2. Click Status arrow once → alphabetical ascending (Draft before Submitted)
+  3. Click again → alphabetical descending
+- **Expected Result:** A→Z then Z→A by status label text
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Status badge text may be empty in a11y tree; assert via visible badge colors or Next Step labels as secondary signal if needed.
 
 ## IO-020 — Partner column filter works
 - **Module:** Column Filter
-- **User Role:** PM / BDU
-- **Preconditions:** Invoices with multiple partners exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** ≥2 partners in gallery
+- **Live-locked:** Funnel → `cnt_PartnerFilter` / `cmb_PartnerFilter` (“Partners”). Click combo → option list; type to narrow (e.g. `HP` → HP* partners); select one. Leave Overview (Dashboard) and return → filter UI/selection cleared.
 - **Steps:**
-  1. Click filter icon on Partner column
-  2. Select a specific partner
-  3. Observe results
-- **Expected Result:** Gallery shows only invoices for the selected partner
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Column-level (not global-search) filter test — distinct UI control from IO-013's search box; verify it's an independent filter mechanism.
+  1. Click Partner **funnel**
+  2. Click the Partners search dropdown
+  3. Type part of a partner name → matching options appear
+  4. Select a partner → gallery only that partner
+  5. Navigate to Dashboard then back to Invoice Overview → filter cleared (mixed partners again)
+- **Expected Result:** Searchable combo filter; cleared on leaving Overview
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Distinct from global Search box (IO-013). Project funnel mirrors this (`icnProjectFilterInvoiceOverview`).
 
 ## IO-021 — Status column filter works
 - **Module:** Column Filter
-- **User Role:** PM / BDU
-- **Preconditions:** Invoices with multiple statuses exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** ≥2 statuses in gallery
+- **Live-locked:** Funnel → `cnt_StatusFilter` / `dd_StatusFilter` (“Status”). Open → type (e.g. `Sub` / `Draft`) → matching status option(s); select → gallery filtered. Clear by leaving Overview and returning.
 - **Steps:**
-  1. Click filter icon on Status column
-  2. Select a specific status
-  3. Observe results
-- **Expected Result:** Gallery shows only invoices with the selected status
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Same column-filter pattern as IO-020, applied to Status — good to parameterize across all known status values (Draft, Submitted, Reviewed, Approved, Sent, Flagged, Cancelled, Fail-Creation).
+  1. Click Status **funnel**
+  2. Open Status dropdown and type a status fragment
+  3. Select the status → only that status remains
+  4. Dashboard → Overview → filter cleared
+- **Expected Result:** Searchable status filter; cleared on nav away
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Same funnel→search→select→clear-by-nav pattern as Partner.
 
 ## IO-022 — Action Pending With filter works
 - **Module:** Column Filter
-- **User Role:** PM / BDU
-- **Preconditions:** Invoices assigned to multiple users exist
+- **User Role:** PM / BDU (both)
+- **Preconditions:** Rows with different Action Pending With users
+- **Live-locked:** **Funnel only — no sort arrow.** Control id is `icnStatusFilterInvoiceOverview_1` (misnamed). Opens `cnt_ActionPendingFilter` labeled “Action Pending With”. No separate sort control on this column.
 - **Steps:**
-  1. Click filter icon on Action Pending With column
-  2. Select a user
-  3. Observe results
-- **Expected Result:** Gallery shows only invoices pending action with the selected user
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Confirms the "Action Pending With" column filter correctly ties to the workflow-assignment logic (whoever needs to act next), not just a static owner field.
+  1. Confirm Action Pending header has funnel only (no arrow)
+  2. Click funnel → Action Pending With filter box appears
+  3. Open dropdown / search and select a user (when options available)
+  4. Gallery shows only rows pending with that user
+  5. Dashboard → Overview → filter cleared
+- **Expected Result:** User filter via funnel only; no column sort
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Do not assert a sort arrow on this column. If the combo yields no options in an env, fail with a clear seed/data message (do not skip).
 
 ## IO-023 — Review button visible for Submitted invoices
 - **Module:** Next Step
@@ -329,25 +344,33 @@
 
 ## IO-029 — PDF viewer shows navigation and zoom controls
 - **Module:** PDF Viewer
-- **User Role:** BDU
-- **Preconditions:** A Submitted invoice exists and PDF viewer is open
+- **User Role:** PM / BDU (both)
+- **Preconditions:** At least one invoice whose Next Step is **Review**, **Approve**, or **View** (any of these opens the same View Invoice PDF). Else fail: no invoice with PDF Next Step — please create/submit some.
+- **Live-locked (DEV 15 Sep 2026 + user screenshot):** Overlay title **View Invoice**. PDF toolbar: search (magnifier), page up/down, page indicator (`1 / 1`), zoom **−** / **+**. Top-right of modal: Download icon + Close (X). Footer actions (Flag / Mark as Reviewed) depend on status — **out of scope** for IO-029 (visibility of viewer chrome only).
 - **Steps:**
-  1. Click Review on a Submitted invoice
-  2. Observe the PDF viewer controls
-- **Expected Result:** PDF viewer shows: page up/down buttons, page number indicator (e.g. 1/1), zoom in (+), zoom out (-), search icon, download button, close (X) button
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Control-inventory test for the PDF viewer chrome — assert each named control is present; a good candidate to combine with IO-030/IO-031 which exercise the Download and Close buttons specifically.
+  1. Open Invoice Overview
+  2. Click Next Step **Review** or **Approve** or **View** (whichever is available)
+  3. Assert **View Invoice** overlay with PDF loaded
+  4. Assert zoom controls visible (− and +)
+  5. Assert page nav / page indicator visible
+  6. Close without mutating (X) — reuse TC-IO-20 close pattern
+- **Expected Result:** Zoom and page navigation controls are visible; no download click in this case
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Visibility-only. Do not assert Flag / Mark as Reviewed here. Download belongs to IO-030.
 
 ## IO-030 — Download button in PDF viewer saves the PDF
 - **Module:** PDF Viewer
-- **User Role:** PM / BDU
-- **Preconditions:** An invoice PDF is open in the viewer
+- **User Role:** PM / BDU (both)
+- **Preconditions:** Same as IO-029 — a Review / Approve / View Next Step row exists
+- **Live-locked:** Top-right **Download** icon (arrow into tray) on View Invoice; click starts a browser download of the invoice PDF.
 - **Steps:**
-  1. Open PDF viewer for an invoice
-  2. Click the Download button
-- **Expected Result:** PDF file is downloaded to the user's local machine
-- **Priority:** Medium | **Status:** Active
-- **Scenario Explanation:** Download-mechanics test — use Playwright's `page.waitForEvent('download')` pattern, same approach as CI-071 in the Create Invoice suite.
+  1. Open View Invoice via Review / Approve / View
+  2. Click the Download icon (not zoom, not Close)
+  3. Assert a download starts (`page.waitForEvent('download')`); optionally check filename contains invoice # when available
+  4. Close the overlay
+- **Expected Result:** PDF download starts successfully
+- **Priority:** Medium | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Both personas. Prefer `waitForEvent('download')` over file-system path asserts.
 
 ## IO-031 — Close button dismisses the PDF viewer
 - **Module:** PDF Viewer
@@ -375,109 +398,136 @@
 
 ## IO-032 (b) — Three-dot menu shows Delete Draft for Draft invoices
 - **Module:** Actions Menu
-- **User Role:** PM / BDU
-- **Preconditions:** A Draft invoice exists
+- **User Role:** PM / BDU (both — different visibility rules)
+- **Preconditions:** At least one **Draft** the persona can see. Else fail: no Draft available — please create a draft.
+- **Live-locked (15 Sep 2026):**
+  - **PM:** **Delete Draft** only on drafts **they own** (My Invoices / own rows).
+  - **Admin (BDU):** On **All Invoices**, can see **Delete Draft** on **other users’ drafts** as well as their own.
+  - ⋮ also shows **Send Notification** (bell) — out of scope for this case except not to click it.
 - **Steps:**
-  1. Find a Draft invoice
-  2. Click the three-dot menu icon on that row
-- **Expected Result:** Delete Draft option is visible in the menu
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** ⚠️ **Duplicate ID in source document** — this test case shares the ID "IO-032" with the PDF-loads-without-error test above. Recommend renumbering this one to **IO-032a** (PDF check) and **IO-032b** (Delete Draft menu) — or renumbering this one to **IO-043** to fill the gap before IO-044/IO-045 — when building the Playwright test file, so test names/IDs stay unique. Functionally, this checks that the row-level three-dot context menu correctly conditions its options on invoice status (Delete Draft only for Draft).
+  1. Open Invoice Overview (Admin: All Invoices)
+  2. Find a Draft row the persona should be allowed to delete
+  3. Click row **⋮**
+  4. Assert **Delete Draft** (red) is visible
+  5. Optional companion: PM on someone else’s draft (if visible) → Delete Draft **hidden**; or skip if PM cannot see others’ drafts
+- **Expected Result:** Delete Draft visibility matches owner vs Admin/All rules above
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Visibility only — do **not** click Delete Draft here (that is IO-034).
 
 ## IO-033 — Delete Draft shows confirmation popup
 - **Module:** Actions Menu
 - **User Role:** PM / BDU
-- **Preconditions:** A Draft invoice exists
-- **Steps:**
-  1. Click three-dot menu on a Draft invoice
-  2. Click Delete Draft
-- **Expected Result:** A confirmation popup appears before deletion
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Confirms a destructive action is gated behind a confirmation step — should also verify a "Cancel"/dismiss path on the popup leaves the draft intact (not explicitly stated but a sensible companion assertion).
+- **Live-locked:** **Superseded / not applicable.** Clicking **Delete Draft** **deletes immediately** — **no** confirmation popup.
+- **Automation:** Do **not** implement Excel’s confirm step. Keep a skipped stub labeled superseded, or replace with a negative assert “no confirm dialog” only if useful; preferred: drop from active suite and fold behavior into IO-034.
+- **Priority:** — | **Status:** Superseded by live app
+- **Scenario Explanation:** Excel expected a confirm gate; product does not.
 
 ## IO-034 — Confirming Delete Draft removes the invoice
 - **Module:** Actions Menu
-- **User Role:** PM / BDU
-- **Preconditions:** A Draft invoice exists
+- **User Role:** PM / BDU (both — each deletes a draft they are allowed to delete)
+- **Preconditions:** A **disposable Draft** (prefer one created for the test, or a clearly throwaway row). Else fail: no disposable Draft — please create one.
+- **Live-locked:** ⋮ → **Delete Draft** → invoice removed **immediately** (no confirm). Gallery refreshes; that draft is gone.
 - **Steps:**
-  1. Click Delete Draft from three-dot menu
-  2. Confirm deletion in the popup
-- **Expected Result:** Invoice is deleted. Gallery refreshes and the draft invoice is no longer visible
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Completes the delete flow started in IO-033 — assert both the gallery no-longer-shows-the-row AND (if feasible) that the underlying Dataverse record is actually removed, not just hidden from view.
+  1. Note partner/project (and invoice # if any) of a disposable Draft
+  2. ⋮ → Delete Draft
+  3. Assert no confirmation dialog
+  4. Assert that draft row is no longer in the gallery
+- **Expected Result:** Draft deleted immediately; row gone
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Mutating. Never delete shared/production-important drafts. Title keeps Excel ID; behaviour is direct delete, not “confirm”.
 
 ## IO-035 — Cancel option available for Approved invoices
 - **Module:** Actions Menu
-- **User Role:** BDU
-- **Preconditions:** Invoices in Submitted, Reviewed, Approved status exist
+- **User Role:** BDU / Admin only (`@admin`)
+- **Preconditions:** At least one **Approved** invoice visible under All Invoices. Else fail: no Approved invoice — please create/approve one.
+- **Live-locked (15 Sep 2026 + screenshots):** On Approved row ⋮ menu: **Send Notification**, **Cancel Invoice** (red), **Send Instantly**. PM not confirmed to see Cancel — treat as Admin-only until told otherwise.
 - **Steps:**
-  1. Login as BDU
-  2. Click three-dot on Approved invoice
-- **Expected Result:** Cancel option is visible
-- **Priority:** High | **Status:** Active
-- **Notes:** BDU only
-- **Scenario Explanation:** Role-gated menu-option test — "BDU only" note implies a PM login should NOT see this Cancel option; consider adding a negative-case assertion for a PM user on the same invoice if role-based UI differs (worth confirming with the app owner, since preconditions mention Submitted/Reviewed/Approved but steps only exercise Approved).
+  1. Login as Admin → Invoice Overview → All Invoices
+  2. Find an Approved row (Next Step **View**)
+  3. Click ⋮ → assert **Cancel Invoice** visible (red)
+  4. Do **not** confirm cancel in this case (visibility only)
+- **Expected Result:** Cancel Invoice present on Approved ⋮ for Admin
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Visibility only. Full cancel flow is IO-036.
 
 ## IO-036 — Cancelling invoice changes status to Cancelled
 - **Module:** Actions Menu
-- **User Role:** BDU
-- **Preconditions:** An Approved invoice exists
+- **User Role:** BDU / Admin only (`@admin`)
+- **Preconditions:** A **disposable Approved** invoice (prefer throwaway). Else fail with seed message.
+- **Live-locked:**
+  1. ⋮ → **Cancel Invoice**
+  2. **Comments** modal — placeholder “Type here.”; **Cancel Invoice** button **disabled** until text entered
+  3. Type a reason → button enables (red) → click **Cancel Invoice**
+  4. Toast: **Invoice has been cancelled**
+  5. Status becomes **Cancelled**; app opens **edit mode** with the comment visible; user can **Save Draft** / **Submit** (resubmit) again
 - **Steps:**
-  1. Login as BDU
-  2. Click Cancel from three-dot menu on Approved invoice
-  3. Enter the reason for cancellation
-  4. Confirm cancellation
-- **Expected Result:** Invoice status changes to Cancelled
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Completes the Cancel flow from IO-035 — note the mandatory "reason" text entry; automation should assert the reason field is required (try submitting blank) and that the entered reason persists on the record.
+  1. Admin opens disposable Approved → ⋮ → Cancel Invoice
+  2. Assert Comments modal; assert Cancel Invoice disabled while empty
+  3. Type reason (e.g. `automation cancel`) → assert button enabled → click
+  4. Assert toast **Invoice has been cancelled**
+  5. Assert edit form (or Cancelled status + comments field showing the reason)
+  6. Close without mandatory resubmit (resubmit optional companion later)
+- **Expected Result:** Cancelled + toast + comments required + lands in editable state with comment
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Mutating. Never cancel shared production invoices. Excel “confirm” = Comments modal + enabled Cancel Invoice button, not a separate Yes/No dialog.
 
 ## IO-037 — BDU / Reviewer can review a Submitted invoice
 - **Module:** Review Action
-- **User Role:** BDU / Reviewer
-- **Preconditions:** A Submitted invoice exists
+- **User Role:** BDU / Admin (`@admin`)
+- **Preconditions:** A Submitted invoice (Next Step **Review**) exists. Else fail: no Submitted invoice — please submit one.
+- **Live-locked (DEV 16 Sep 2026):** Review opens **View Invoice** with PDF, **Flag**, and **Mark as Reviewed**. Close-without-action is TC-IO-20; Flag is IO-039. This case is the **Mark as Reviewed** branch.
 - **Steps:**
-  1. Open the invoice overview screen
-  2. Click Review on the Submitted invoice
-  3. View the PDF
-  4. Click Mark as Reviewed or Flag or close
-- **Expected Result:** PDF viewer opens. BDU can choose to Review, Flag, or close without action. Invoice status updates accordingly
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Branching-outcome test with three distinct paths from one entry point (Mark as Reviewed / Flag / Close-no-action). Recommend splitting this into three separate Playwright test cases — one per branch — each asserting the correct resulting status (Reviewed, Flagged, or unchanged/Submitted).
+  1. Admin → Invoice Overview → All Invoices
+  2. Click **Review** on a Submitted row
+  3. Assert **View Invoice**, PDF, **Flag**, **Mark as Reviewed**
+  4. Click **Mark as Reviewed** (fill Comments if the button stays disabled)
+  5. After **Mark as Reviewed**, poll Dataverse `dia_status` for that invoice # until **Reviewed** (live: **Pending** while the review flow runs). Flow-run evidence is a later add-on.
+- **Expected Result:** `dia_status` = **Reviewed**. Confirmed DEV 16 Sep 2026 on **2026-0441**. Do not treat other gallery rows’ Approve as success.
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Mutating. Wait through Pending until Reviewed. Do not Flag here (IO-039). Close-only is TC-IO-20.
 
 ## IO-038 — BDU / Approver can approve a Reviewed invoice
 - **Module:** Approve Action
-- **User Role:** BDU / Approver
-- **Preconditions:** A Reviewed invoice exists
+- **User Role:** BDU / Admin (`@admin`)
+- **Preconditions:** A Reviewed invoice (Next Step **Approve**) exists. Else fail: no Reviewed invoice — please review a disposable invoice.
+- **Live-locked (DEV 16 Sep 2026):** **View Invoice** overlay footer is **Flag** + **Approve** (orange). Do not Flag here (IO-040). After approve, poll Dataverse `dia_status` (live: **Pending** while the approval flow runs). Flow-run evidence is a later add-on.
 - **Steps:**
-  1. Open the invoice overview screen
-  2. Click Approve on the Reviewed invoice
-  3. Confirm approval
-- **Expected Result:** Invoice status changes to Approved
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Core happy-path status-transition test for the Approve action — pairs with CI-053/CI-055 (full lifecycle) in the Create Invoice suite.
+  1. Admin → Invoice Overview → All Invoices
+  2. Click **Approve** on a Reviewed row
+  3. Assert **View Invoice**, PDF, **Flag**, and the approve action
+  4. Click approve (fill Comments if the button stays disabled)
+  5. Poll Dataverse `dia_status` for that invoice # until **Approved**
+- **Expected Result:** `dia_status` = **Approved**. Do not treat other gallery rows’ View as success.
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Mutating. Wait through Pending until Approved. Flag-from-Reviewed is IO-040.
 
 ## IO-039 — BDU / Reviewer can flag a Submitted invoice
 - **Module:** Flag Action
-- **User Role:** BDU / Reviewer
-- **Preconditions:** A Submitted invoice exists
+- **User Role:** BDU / Admin (`@admin`)
+- **Preconditions:** A Submitted invoice (Next Step **Review**) exists. Else fail: no Submitted invoice — please submit a disposable invoice.
+- **Live-locked (DEV 16 Sep 2026):** Overlay **Flag** then **Flag Reason** (“Please add your reason for flagging this invoice.”) + **Finish**. Poll Dataverse `dia_status` until **Flagged**. Email and flow-run evidence are later add-ons.
 - **Steps:**
-  1. Open the Application as BDU or reviewer
-  2. Click on Review
-  3. Click on Flag
-- **Expected Result:** Invoice status changes to Flagged. Email notification sent to submitter
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** One of the three IO-037 branches, isolated as its own test — verify both the status change AND the email trigger (ties to CI-058 in the Create Invoice suite, same notification).
+  1. Admin → Invoice Overview → All Invoices
+  2. Click **Review** on a Submitted row
+  3. Click overlay **Flag** → fill **Flag Reason** → **Finish**
+  4. Poll Dataverse `dia_status` for that invoice # until **Flagged**
+- **Expected Result:** `dia_status` = **Flagged**. Next Step **Edit**. Do not treat other rows as success.
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Mutating IO-037 Flag branch. Email is out of scope for now. Flag-from-Reviewed is IO-040.
 
 ## IO-040 — BDU / Approver can flag a Reviewed invoice
 - **Module:** Flag Action
-- **User Role:** BDU / Approver
-- **Preconditions:** A Reviewed invoice exists
+- **User Role:** BDU / Admin (`@admin`)
+- **Preconditions:** A Reviewed invoice (Next Step **Approve**) exists. Else fail: no Reviewed invoice — please review a disposable invoice.
+- **Live-locked (DEV 16 Sep 2026):** Same Flag path as IO-039. Entry is **Approve** → View Invoice → overlay **Flag** → **Flag Reason** → **Finish**. Poll Dataverse `dia_status` until **Flagged**. Email and flow-run evidence are later add-ons.
 - **Steps:**
-  1. Open the Application as BDU / Approver
-  2. Flag a Reviewed invoice
-- **Expected Result:** Invoice status changes to Flagged. Notification email sent
-- **Priority:** High | **Status:** Active
-- **Scenario Explanation:** Confirms Flag is available from a second entry point (Reviewed, not just Submitted) — good to verify the resulting Flagged invoice re-enters the Edit/resubmit flow (IO-025, CI-057) the same way regardless of which stage it was flagged from.
+  1. Admin → Invoice Overview → All Invoices
+  2. Click **Approve** on a Reviewed row
+  3. Click overlay **Flag** → fill **Flag Reason** → **Finish**
+  4. Poll Dataverse `dia_status` for that invoice # until **Flagged**
+- **Expected Result:** `dia_status` = **Flagged**. Next Step **Edit**. Do not treat other rows as success.
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Mutating. Same overlay Flag flow as IO-039; entry is Reviewed/Approve instead of Submitted/Review.
 
 ## IO-041 — Invoice amounts display correct decimal values
 - **Module:** Decimal Values
@@ -489,6 +539,8 @@
 - **Expected Result:** Decimal values are displayed correctly. Rate and Total values limited to 4 decimal places
 - **Priority:** Medium | **Status:** Active
 - **Scenario Explanation:** Ties directly to the ongoing **Non-NA PDF quantity formatting** work (minimum 2 decimals, preserving 3–4 when intentionally entered). Automation here is at the gallery/overview level rather than the PDF, so it's a good complementary check — verify the same N2/N3/N4 formatting logic applies consistently in the gallery view, not just the generated PDF.
+- **Automated steps (16 Sep 2026):** Admin creates an **adhoc** invoice on a non-NA project (fixtures pick the active partner/project pair), adds five line items using Editable Rate products that carry **no default catalog rate**, Qty 1 each, rates `2 / 1.2 / 1.21 / 1.123 / 1.1234`. Submit, then find the row on Overview by **project name** (search by invoice number does not match) and wait out the disabled "Background Invoice Process Running" Next Step by refreshing the gallery. Open the row's Next Step to get **View Invoice**, read the PDF.js text layer, and compare each row's Rate against what was typed — anchored on the row description so a neighbouring row cannot satisfy the check. Close the overlay with `icn_closeViewInvoiceInvoiceOverview`; no Flag / Mark as Reviewed.
+- **Current result:** FAILS on rows 4 and 5 — PDF prints `AU$1.12` for both 1.123 and 1.1234. The Rate field and Dataverse keep 4 decimals, so the loss happens in the PDF/Total formatting.
 
 ## IO-042 — Alphabetical Order
 - **Module:** Alphabetical Order
@@ -500,6 +552,8 @@
 - **Expected Result:** Partner, Project, and other dropdown filter values are displayed in alphabetical order
 - **Priority:** Low | **Status:** Active
 - **Scenario Explanation:** General UX/consistency check that all column-filter dropdown value lists (not just Partner) are alphabetically sorted — worth expanding into a small parameterized test across Partner, Project, and Status filter dropdowns.
+- **Automated steps (16 Sep 2026):** One audit test. Sort arrows (`clickColumnSortArrow`) on Partner, Project and Invoice # are clicked twice each and the gallery values checked ascending then descending. Then each funnel (`clickColumnFunnel` → `cmb_PartnerFilter` / `cmb_ProjectFilter` / `cnt_ActionPendingFilter` / `dd_StatusFilter`) is opened and its value list read and checked A→Z. Findings are attached as a markdown report.
+- **Current result:** Sorts pass both directions. FAILS on funnel order — Partner (194 values, starts `Test Account1, Hearfit21, CN…`), Project (294 values, `27th aug, qq, ttt, AOC…`) and Action Pending with (14 values, `Sohan Lal, Aryan Kotiyal…`) are in creation order. The Status funnel is lifecycle-ordered (Draft, Reviewed, Approved, Flagged, Submitted, Fail-*, Cancelled, Sent) — reported for confirmation, not asserted.
 
 ---
 

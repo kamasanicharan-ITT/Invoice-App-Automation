@@ -115,14 +115,19 @@ Helpers: `tests/utils/invoice-overview-ui.ts`.
 
 | ID | Why it is parked |
 |----|------------------|
-| IO-009 | Future vs This Month overlap needs a dated fixture and pass/fail rule |
-| IO-016–019 | Column sort — unlabeled header icons |
-| IO-020–022, IO-042 | Column filter UI not mapped |
-| IO-029–030 | PDF zoom / download chrome unlabeled |
-| IO-032b–034 | Draft three-dot / Delete Draft not mapped |
-| IO-035–036 | Cancel Invoice (who, which statuses, reason) |
-| IO-038–040 | Approve / Flag mutating overlays — use **own** invoices only |
-| IO-041 | Gallery has no Rate/Total columns |
+| IO-033 | Superseded — live app deletes Draft with no confirm popup |
+
+**Batch 1 locked & scripted (15 Sep 2026):** IO-008, 009, 016–022, 029, 030, 032b, 034, 035, 036.
+
+**Batch 2 locked & scripted (16 Sep 2026):** IO-037–040 (lifecycle, Dataverse `dia_status` polling), IO-041, IO-042.
+
+### Open defects the scripted cases report
+
+| Case | Live behaviour | Expected |
+|------|----------------|----------|
+| IO-041 | PDF (non-NA template) prints Rate/Amount at 2 decimals — 1.123 and 1.1234 both render `AU$1.12`; grid Total and invoice Total (`AU$6.65` for 6.6564) round the same way. Rate field and Dataverse `dia_rate` keep all 4 decimals. | Rate and Total shown to 4 decimals |
+| IO-042 | Partner (194), Project (294) and Action Pending with (14) funnel value lists come back in creation order, not A→Z. Sort arrows on Partner / Project / Invoice # work both directions. | Funnel value lists alphabetical |
+| IO-041 side finding | Overview **Search** does not match an invoice number such as `INV-104502`; the same row is found by project name. Non-NA invoices also number `INV-1045xx` rather than `2026-xxxx`. | Confirm expected |
 
 Mutating lifecycle (Mark as Reviewed, Flag, Approve, Send Instantly from ⋮) stays out of the suite until you give fixtures and expected overlays.
 

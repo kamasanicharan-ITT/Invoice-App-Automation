@@ -694,6 +694,39 @@ async function toProjectFixture(
 }
 
 /**
+ * Persona-scoped projects with a covering Active contract and no invoice
+ * (any type except Cancelled) in the duplicate-check window.
+ * Used to seed a disposable Draft — skip projects that already have an invoice.
+ */
+export async function listProjectsClearForDraftSeed(
+  token: string,
+  persona: CreateInvoicePersona
+): Promise<ProjectFixture[]> {
+  const allowedProjectIds = await resolvePersonaProjectIds(token, persona);
+  const { end: invoiceDateIso } = getBillingCycleDates();
+  const dupWindow = getDuplicateCheckWindow();
+  const invoiceDate = invoiceDateIso.slice(0, 10);
+  const contracts = await fetchActiveContractsCoveringDate(token, invoiceDate, allowedProjectIds);
+  const byProject = groupContractsByProject(contracts);
+  const found: ProjectFixture[] = [];
+
+  for (const [projectId, list] of byProject) {
+    if (allowedProjectIds && !allowedProjectIds.has(normGuid(projectId))) continue;
+    if (list.length < 1) continue;
+    if (
+      await projectHasInvoiceInWindow(token, projectId, dupWindow.start, dupWindow.end, {
+        excludeCancelled: true,
+      })
+    ) {
+      continue;
+    }
+    const fixture = await toProjectFixture(token, projectId, list);
+    if (fixture) found.push(fixture);
+  }
+  return found;
+}
+
+/**
  * Active project with exactly one Active contract covering Invoice Date,
  * and no non-adhoc (non-Cancelled) invoice in the duplicate-check window.
  */

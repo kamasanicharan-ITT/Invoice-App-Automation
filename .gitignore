@@ -16,4 +16,7 @@ probe-*.txt
 probe-*.png
 run-group*.txt
 run-group*.json
+/test-run-*.log
+/overview-*.png
+/overview-*.md
 

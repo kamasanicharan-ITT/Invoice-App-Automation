@@ -122,6 +122,49 @@ async function pollInvoiceUntilTerminal(opts: {
   return { row: latest, waitedMs: Date.now() - started, polls };
 }
 
+/** Poll `dia_status` for one invoice number until it matches (Pending is not terminal). */
+export async function waitForInvoiceStatus(opts: {
+  token: string;
+  invoiceNumber: string;
+  match: RegExp;
+  timeoutMs?: number;
+}): Promise<{ status?: string; row?: InvoiceRow; waitedMs: number; polls: number }> {
+  const timeoutMs = opts.timeoutMs ?? 180000;
+  const filter = `dia_invoicenumber eq '${odataString(opts.invoiceNumber)}'`;
+  const query =
+    `dia_invoicedetailses?$select=dia_status,dia_invoicenumber,modifiedon` +
+    `&$filter=${encodeURIComponent(filter)}&$orderby=modifiedon desc&$top=1`;
+  const started = Date.now();
+  let polls = 0;
+  let latest: InvoiceRow | undefined;
+  let lastLogged = '';
+
+  while (Date.now() - started < timeoutMs) {
+    polls++;
+    const res = await dvGet<{ value?: InvoiceRow[] }>(opts.token, query);
+    if (!res.ok) break;
+    latest = res.body?.value?.[0];
+    const status = latest ? str(latest, 'dia_status') ?? '(blank)' : '(none)';
+    if (status !== lastLogged) {
+      lastLogged = status;
+      console.log(
+        `Invoice ${opts.invoiceNumber} ${Math.round((Date.now() - started) / 1000)}s: dia_status=${status}`
+      );
+    }
+    if (latest && opts.match.test(status)) {
+      return { status, row: latest, waitedMs: Date.now() - started, polls };
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  return {
+    status: latest ? str(latest, 'dia_status') : undefined,
+    row: latest,
+    waitedMs: Date.now() - started,
+    polls,
+  };
+}
+
 export async function waitForSubmittedInvoice(opts: {
   token: string;
   projectId: string;

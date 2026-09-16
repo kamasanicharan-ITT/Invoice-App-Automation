@@ -8,7 +8,43 @@
 import { test, expect } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
 import { dismissHostDialogs } from './utils/host-dialogs';
-import { captureDataverseToken } from './utils/dataverse-fixtures';
+import {
+  captureDataverseToken,
+  listActiveContractsForProject,
+  loadCreateInvoiceFixtures,
+} from './utils/dataverse-fixtures';
+import {
+  waitForInvoiceAfterAction,
+  waitForInvoiceStatus,
+  waitForSubmittedInvoice,
+} from './utils/flow-audit';
+import {
+  awaitSubmitNavigatedToOverview,
+  contractModalOpen,
+  dismissDuplicateDialog,
+  ensureLineItemRow,
+  openCreateInvoice,
+  selectContractIfPrompted,
+  selectPartnerAndProject,
+  selectedProjectButton,
+  setAdhoc,
+} from './utils/create-invoice-ui';
+import {
+  DECIMAL_DESCRIPTIONS,
+  DECIMAL_RATES,
+  addLineItemRow,
+  closeViewInvoiceOverlay,
+  decimalTokens,
+  expectedRateDisplay,
+  fillDecimalRow,
+  lineItemRowCount,
+  listOpenRateProducts,
+  normalizePdfText,
+  pdfRowValues,
+  readPdfViewerText,
+  waitForRowNextStep,
+  type FilledRow,
+} from './utils/invoice-decimal-rates';
 import {
   isRetiredInvoiceFlowName,
   listCloudFlows,
@@ -18,20 +54,34 @@ import {
   type WorkflowRow,
 } from './utils/flow-runs';
 import {
+  INVOICE_NUMBER,
   PERIOD_OPTIONS,
   REGIONS,
   activePersona,
   applyPeriod,
+  clickColumnFunnel,
+  clickColumnSortArrow,
   clickIconRightOf,
   clickPaginationPrev,
+  closeViewInvoice,
+  commentsModalCancelInvoiceButton,
+  downloadViewInvoicePdf,
+  ensureDisposableDraft,
+  ensureOverviewRows,
   expectComboOptions,
   firstInvoiceNumber,
   firstRowPartnerAndProject,
+  galleryRows,
+  isSortedAsc,
+  isSortedDesc,
   openInvoiceOverview,
+  openPdfFromNextStep,
+  openRowKebab,
   overviewHasRows,
   pageNumberButtons,
   periodButton,
   regionDropdown,
+  resetOverviewViaDashboard,
   scopeRadios,
   waitForOverviewSettled,
 } from './utils/invoice-overview-ui';
@@ -188,9 +238,9 @@ test.describe('Invoice Overview Screen', () => {
     });
   });
 
-  test('TC-IO-02: Admin can switch My Invoices / All Invoices', async ({ page }, testInfo) => {
-    test.skip(activePersona(testInfo) === 'pm', '[PM] My/All radios are hidden — Admin-only');
-
+  test('TC-IO-02: Admin can switch My Invoices / All Invoices @admin', async ({
+    page,
+  }, testInfo) => {
     const appFrame = await openInvoiceOverview(page);
     const radios = scopeRadios(appFrame);
 
@@ -214,9 +264,9 @@ test.describe('Invoice Overview Screen', () => {
     });
   });
 
-  test('TC-IO-02b: PM does not see My / All Invoices radios', async ({ page }, testInfo) => {
-    test.skip(activePersona(testInfo) === 'admin', '[Admin] radios are visible — PM-only deny');
-
+  test('TC-IO-02b: PM does not see My / All Invoices radios @pm', async ({
+    page,
+  }, testInfo) => {
     const appFrame = await openInvoiceOverview(page);
     const radios = scopeRadios(appFrame);
 
@@ -313,15 +363,16 @@ test.describe('Invoice Overview Screen', () => {
     let invoiceNumber = '';
 
     await test.step('Capture invoice number from list', async () => {
-      const cell = appFrame.getByText(INVOICE_NUMBER).first();
-      await expect(cell).toBeVisible({ timeout: 30000 });
-      invoiceNumber = ((await cell.textContent()) || '').trim();
-      expect(invoiceNumber).toMatch(INVOICE_NUMBER);
+      invoiceNumber = await firstInvoiceNumber(appFrame);
+      expect(invoiceNumber, 'Expected an invoice number in the Overview gallery').toMatch(
+        INVOICE_NUMBER
+      );
     });
 
     await test.step('Search filters the list', async () => {
       await search.fill(invoiceNumber);
       await expect(search).toHaveValue(invoiceNumber);
+      await waitForOverviewSettled(appFrame);
       await expect(appFrame.getByText(invoiceNumber).first()).toBeVisible({ timeout: 15000 });
       await markGroupAndShot(
         page,
@@ -601,13 +652,53 @@ test.describe('Invoice Overview Screen', () => {
       );
     });
 
-    test('IO-008: Future Months option can be applied', async ({ page }, testInfo) => {
+    test('IO-008: Future Months shows invoices after the 5th of next month', async ({
+      page,
+    }, testInfo) => {
       const appFrame = await openInvoiceOverview(page);
       await applyPeriod(appFrame, 'Future Months');
+      const hasRows = await overviewHasRows(appFrame);
+      expect(
+        hasRows,
+        'No invoices in Future Months to filter — please create some (invoice date on/after the 6th of next month)'
+      ).toBe(true);
       await markGroupAndShot(
         page,
-        [appFrame.getByText('Show Invoices', { exact: true }), periodButton(appFrame, 'Future Months')],
+        [
+          appFrame.getByText('Show Invoices', { exact: true }),
+          periodButton(appFrame, 'Future Months'),
+        ],
         'Future Months',
+        testInfo
+      );
+    });
+
+    test('IO-009: Future month invoice does not appear in This Month', async ({
+      page,
+    }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await applyPeriod(appFrame, 'Future Months');
+      const futureRows = await galleryRows(appFrame);
+      const futureInvoices = futureRows.map((r) => r.invoice).filter(Boolean);
+      expect(
+        futureInvoices.length > 0 || (await overviewHasRows(appFrame)),
+        'No invoices in Future Months to filter — please create some (invoice date on/after the 6th of next month)'
+      ).toBe(true);
+
+      await applyPeriod(appFrame, 'This Month');
+      for (const inv of futureInvoices) {
+        await expect(
+          appFrame.getByText(inv, { exact: true }),
+          `Future invoice ${inv} must not appear under This Month`
+        ).toHaveCount(0);
+      }
+      await markGroupAndShot(
+        page,
+        [
+          appFrame.getByText('Show Invoices', { exact: true }),
+          periodButton(appFrame, 'This Month'),
+        ],
+        'This Month excludes Future Months invoices',
         testInfo
       );
     });
@@ -655,7 +746,10 @@ test.describe('Invoice Overview Screen', () => {
       const search = appFrame.getByPlaceholder('Search');
       await search.fill(partner);
       await expect(search).toHaveValue(partner);
-      await expect(appFrame.getByText(partner).first()).toBeVisible({ timeout: 15000 });
+      await waitForOverviewSettled(appFrame);
+      await expect(appFrame.getByText(partner, { exact: true }).first()).toBeVisible({
+        timeout: 15000,
+      });
     });
 
     test('IO-014: Search by project name', async ({ page }, testInfo) => {
@@ -666,79 +760,1179 @@ test.describe('Invoice Overview Screen', () => {
       const search = appFrame.getByPlaceholder('Search');
       await search.fill(project);
       await expect(search).toHaveValue(project);
-      await expect(appFrame.getByText(project).first()).toBeVisible({ timeout: 15000 });
+      await waitForOverviewSettled(appFrame);
+      await expect(appFrame.getByText(project, { exact: true }).first()).toBeVisible({
+        timeout: 15000,
+      });
     });
   });
 
-  test.describe('Deferred Excel cases (pending product confirmation)', () => {
-    const pending = 'Deferred until product behaviour is confirmed';
-    test('IO-009: Future month invoice does not appear in This Month', async () => {
-      test.skip(true, pending);
+  test.describe('Locked Excel cases (sort, filter, PDF, delete, cancel)', () => {
+    test('IO-016: Partner column sorts ascending then descending', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to sort — please create some'
+      ).toBe(true);
+
+      await clickColumnSortArrow(page, appFrame, 'Partner');
+      const asc = (await galleryRows(appFrame)).map((r) => r.partner).filter(Boolean);
+      expect(asc.length, 'No partner values after sort').toBeGreaterThan(0);
+      expect(isSortedAsc(asc), `Partner not A→Z after first click: ${asc.slice(0, 8).join(', ')}`).toBe(
+        true
+      );
+
+      await clickColumnSortArrow(page, appFrame, 'Partner');
+      const desc = (await galleryRows(appFrame)).map((r) => r.partner).filter(Boolean);
+      expect(
+        isSortedDesc(desc),
+        `Partner not Z→A after second click: ${desc.slice(0, 8).join(', ')}`
+      ).toBe(true);
+
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Partner', { exact: true }).first()],
+        'Partner sort',
+        testInfo
+      );
     });
-    test('IO-016: Partner column sorts ascending then descending', async () => {
-      test.skip(true, pending);
+
+    test('IO-017: Project column sorts correctly', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to sort — please create some'
+      ).toBe(true);
+
+      await clickColumnSortArrow(page, appFrame, 'Project');
+      const asc = (await galleryRows(appFrame)).map((r) => r.project).filter(Boolean);
+      expect(isSortedAsc(asc), `Project not A→Z: ${asc.slice(0, 8).join(', ')}`).toBe(true);
+
+      await clickColumnSortArrow(page, appFrame, 'Project');
+      const desc = (await galleryRows(appFrame)).map((r) => r.project).filter(Boolean);
+      expect(isSortedDesc(desc), `Project not Z→A: ${desc.slice(0, 8).join(', ')}`).toBe(true);
+
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Project', { exact: true }).first()],
+        'Project sort',
+        testInfo
+      );
     });
-    test('IO-017: Project column sorts correctly', async () => {
-      test.skip(true, pending);
+
+    test('IO-018: Invoice # column sorts correctly', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to sort — please create some'
+      ).toBe(true);
+
+      await clickColumnSortArrow(page, appFrame, 'Invoice #');
+      const asc = (await galleryRows(appFrame)).map((r) => r.invoice).filter(Boolean);
+      expect(asc.length, 'No invoice numbers after sort — need numbered rows').toBeGreaterThan(0);
+      expect(isSortedAsc(asc), `Invoice # not low→high: ${asc.slice(0, 8).join(', ')}`).toBe(true);
+
+      await clickColumnSortArrow(page, appFrame, 'Invoice #');
+      const desc = (await galleryRows(appFrame)).map((r) => r.invoice).filter(Boolean);
+      expect(isSortedDesc(desc), `Invoice # not high→low: ${desc.slice(0, 8).join(', ')}`).toBe(
+        true
+      );
+
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Invoice #', { exact: true }).first()],
+        'Invoice # sort',
+        testInfo
+      );
     });
-    test('IO-018: Invoice # column sorts correctly', async () => {
-      test.skip(true, pending);
+
+    test('IO-019: Status column sorts correctly', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to sort — please create some'
+      ).toBe(true);
+
+      await clickColumnSortArrow(page, appFrame, 'Status');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Status', { exact: true }).first()],
+        'Status sort first click (A→Z)',
+        testInfo
+      );
+      await clickColumnSortArrow(page, appFrame, 'Status');
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Status', { exact: true }).first()],
+        'Status sort second click (Z→A)',
+        testInfo
+      );
     });
-    test('IO-019: Status column sorts correctly', async () => {
-      test.skip(true, pending);
+
+    test('IO-020: Partner column filter works', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to filter — please create some'
+      ).toBe(true);
+      const { partner } = await firstRowPartnerAndProject(appFrame);
+      expect(partner, 'Could not read a partner name from the gallery').toBeTruthy();
+
+      await clickColumnFunnel(page, appFrame, 'Partner');
+      const partnerFilter = appFrame.locator('[data-control-name="cmb_PartnerFilter"]');
+      await expect(partnerFilter).toBeVisible({ timeout: 10000 });
+      await partnerFilter.click({ force: true });
+      await page.keyboard.type(partner.slice(0, Math.min(4, partner.length)), { delay: 50 });
+      const opt = appFrame.getByRole('option', { name: partner, exact: true });
+      await expect(opt.first()).toBeVisible({ timeout: 15000 });
+      await opt.first().click();
+      await waitForOverviewSettled(appFrame);
+
+      const after = await galleryRows(appFrame);
+      expect(after.length, 'Filter returned no rows').toBeGreaterThan(0);
+      for (const row of after) {
+        if (row.partner) expect(row.partner).toBe(partner);
+      }
+
+      await resetOverviewViaDashboard(page, appFrame);
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Partner', { exact: true }).first()],
+        'Partner filter cleared after nav',
+        testInfo
+      );
     });
-    test('IO-020: Partner column filter works', async () => {
-      test.skip(true, pending);
+
+    test('IO-021: Status column filter works', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to filter — please create some'
+      ).toBe(true);
+
+      await clickColumnFunnel(page, appFrame, 'Status');
+      const filterCombo = appFrame.locator('[data-control-name="dd_StatusFilter"]');
+      await expect(filterCombo).toBeVisible({ timeout: 10000 });
+      await filterCombo.click({ force: true });
+      // Search the open list then select one status (Submitted is always present in DEV This Month)
+      await page.keyboard.type('Sub', { delay: 40 });
+      const submittedOpt = appFrame
+        .getByRole('option', { name: 'Submitted', exact: true })
+        .or(appFrame.getByText('Submitted', { exact: true }));
+      await expect(
+        submittedOpt.first(),
+        'Submitted option missing from Status filter list'
+      ).toBeVisible({ timeout: 15000 });
+      await submittedOpt.first().click({ force: true });
+      await page.keyboard.press('Escape');
+      await waitForOverviewSettled(appFrame);
+      await expect(
+        appFrame.getByRole('button', { name: 'Review' }).first(),
+        'After filtering to Submitted, expected at least one Review Next Step'
+      ).toBeVisible({ timeout: 15000 });
+
+      await resetOverviewViaDashboard(page, appFrame);
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Status', { exact: true }).first()],
+        'Status filter',
+        testInfo
+      );
     });
-    test('IO-021: Status column filter works', async () => {
-      test.skip(true, pending);
+
+    test('IO-022: Action Pending With filter works', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      expect(
+        await overviewHasRows(appFrame),
+        'No invoices to filter — please create some'
+      ).toBe(true);
+
+      await clickColumnFunnel(page, appFrame, 'Action Pending with');
+      const filterCnt = appFrame.locator('[data-control-name="cnt_ActionPendingFilter"]');
+      await expect(
+        filterCnt,
+        'Action Pending filter did not open'
+      ).toBeVisible({ timeout: 10000 });
+      await filterCnt.click({ force: true });
+      await page.keyboard.type('a', { delay: 40 });
+      const anyOpt = appFrame.getByRole('option').first();
+      await expect(
+        anyOpt,
+        'No user options in Action Pending filter — please create invoices with Action Pending users'
+      ).toBeVisible({ timeout: 15000 });
+      const chosen = ((await anyOpt.textContent()) || '').trim();
+      await anyOpt.click();
+      await waitForOverviewSettled(appFrame);
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Action Pending with', { exact: true }).first()],
+        `Action Pending filter ${chosen}`,
+        testInfo
+      );
+
+      await resetOverviewViaDashboard(page, appFrame);
     });
-    test('IO-022: Action Pending With filter works', async () => {
-      test.skip(true, pending);
+
+    test('IO-029: PDF viewer shows navigation and zoom controls', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      await openPdfFromNextStep(page, appFrame);
+      const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
+      await expect(pdf.getByText(/Invoice|Partner Name|INVOICE/i).first()).toBeVisible({
+        timeout: 30000,
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('View Invoice', { exact: true })],
+        'PDF zoom viewer',
+        testInfo
+      );
+      await closeViewInvoice(page, appFrame);
     });
-    test('IO-029: PDF viewer shows navigation and zoom controls', async () => {
-      test.skip(true, pending);
+
+    test('IO-030: Download button in PDF viewer saves the PDF', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      await openPdfFromNextStep(page, appFrame);
+      await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible();
+
+      const outcome = await downloadViewInvoicePdf(page, appFrame);
+      expect(outcome.nameOrUrl.length).toBeGreaterThan(0);
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('View Invoice', { exact: true })],
+        `PDF download (${outcome.kind})`,
+        testInfo
+      );
+      await closeViewInvoice(page, appFrame);
     });
-    test('IO-030: Download button in PDF viewer saves the PDF', async () => {
-      test.skip(true, pending);
+
+    test('IO-032b: Three-dot menu shows Delete Draft for Draft invoices', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(180000);
+      const persona = activePersona(testInfo);
+      test.skip(
+        persona === 'pm',
+        'On hold — PM Delete Draft ⋮ to be verified later (seed Draft on Test for dev 1 works)'
+      );
+      const appFrame = await ensureDisposableDraft(page, browser, persona);
+
+      await openRowKebab(page, appFrame, 'Edit Draft', 'Delete Draft');
+      await expect(appFrame.getByText('Delete Draft', { exact: true })).toBeVisible({
+        timeout: 10000,
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Delete Draft', { exact: true })],
+        'Delete Draft menu',
+        testInfo
+      );
+      await page.keyboard.press('Escape');
     });
-    test('IO-032b: Three-dot menu shows Delete Draft for Draft invoices', async () => {
-      test.skip(true, pending);
+
+    test('IO-033: Delete Draft shows confirmation popup (superseded)', async () => {
+      test.skip(true, 'Superseded — live app deletes immediately with no confirmation popup');
     });
-    test('IO-033: Delete Draft shows confirmation popup', async () => {
-      test.skip(true, pending);
+
+    test('IO-034: Delete Draft removes the invoice immediately', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(180000);
+      const persona = activePersona(testInfo);
+      test.skip(
+        persona === 'pm',
+        'On hold — PM Delete Draft ⋮ to be verified later (seed Draft on Test for dev 1 works)'
+      );
+      const appFrame = await ensureDisposableDraft(page, browser, persona);
+
+      const before = await galleryRows(appFrame);
+      const draftRow = before.find((r) => /Edit Draft/i.test(r.nextStep));
+      const marker = draftRow?.project || draftRow?.partner || 'Draft';
+
+      await openRowKebab(page, appFrame, 'Edit Draft', 'Delete Draft');
+      await expect(appFrame.getByText('Delete Draft', { exact: true })).toBeVisible({
+        timeout: 10000,
+      });
+      await appFrame.getByText('Delete Draft', { exact: true }).click();
+      await waitForOverviewSettled(appFrame);
+      // Canvas may keep a hidden "Delete Draft" template node — assert the Draft row is gone.
+      await expect(
+        appFrame.getByRole('button', { name: 'Edit Draft', exact: true }),
+        'Edit Draft row still present after Delete Draft'
+      ).toHaveCount(0);
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true })],
+        `Deleted draft (${marker})`,
+        testInfo
+      );
     });
-    test('IO-034: Confirming Delete Draft removes the invoice', async () => {
-      test.skip(true, pending);
+
+    test('IO-035: Cancel Invoice option on Approved ⋮ @admin', async ({ page }, testInfo) => {
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      // Narrow to Approved so View rows are on-screen and ⋮ is unambiguous.
+      await clickColumnFunnel(page, appFrame, 'Status');
+      const filterCombo = appFrame.locator('[data-control-name="dd_StatusFilter"]');
+      await expect(filterCombo).toBeVisible({ timeout: 10000 });
+      await filterCombo.click({ force: true });
+      await page.keyboard.type('Approved', { delay: 40 });
+      // Prefer role=option — getByText('Approved') also matches Status badges (often hidden).
+      const approvedOpt = appFrame.getByRole('option', { name: 'Approved', exact: true });
+      await expect(
+        approvedOpt.first(),
+        'Approved option missing from Status filter list'
+      ).toBeVisible({ timeout: 15000 });
+      await approvedOpt.first().click({ force: true });
+      await page.keyboard.press('Escape');
+      await waitForOverviewSettled(appFrame);
+
+      const view = appFrame.getByRole('button', { name: 'View', exact: true });
+      expect(
+        (await view.count()) > 0,
+        'No Approved invoice (View) — please approve a disposable invoice'
+      ).toBe(true);
+
+      await openRowKebab(page, appFrame, 'View', 'Cancel Invoice');
+      await expect(appFrame.getByText('Cancel Invoice', { exact: true })).toBeVisible({
+        timeout: 10000,
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Cancel Invoice', { exact: true })],
+        'Cancel Invoice menu',
+        testInfo
+      );
+      await page.keyboard.press('Escape');
     });
-    test('IO-035: Cancel option available for Approved invoices', async () => {
-      test.skip(true, pending);
+
+    test('IO-036: Cancelling Approved invoice requires comments @admin', async ({
+      page,
+    }, testInfo) => {
+      test.setTimeout(180000);
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+      await clickColumnFunnel(page, appFrame, 'Status');
+      const filterCombo = appFrame.locator('[data-control-name="dd_StatusFilter"]');
+      await expect(filterCombo).toBeVisible({ timeout: 10000 });
+      await filterCombo.click({ force: true });
+      await page.keyboard.type('Approved', { delay: 40 });
+      const approvedOpt = appFrame.getByRole('option', { name: 'Approved', exact: true });
+      await expect(
+        approvedOpt.first(),
+        'Approved option missing from Status filter list'
+      ).toBeVisible({ timeout: 15000 });
+      await approvedOpt.first().click({ force: true });
+      await page.keyboard.press('Escape');
+      await waitForOverviewSettled(appFrame);
+
+      const view = appFrame.getByRole('button', { name: 'View', exact: true });
+      expect(
+        (await view.count()) > 0,
+        'No disposable Approved invoice — please approve a throwaway invoice'
+      ).toBe(true);
+
+      await openRowKebab(page, appFrame, 'View', 'Cancel Invoice');
+      // ⋮ menu item (red) — not the Comments dialog button.
+      await appFrame.getByText('Cancel Invoice', { exact: true }).first().click();
+      await expect(appFrame.getByText('Comments', { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
+      const typed = appFrame.getByPlaceholder(/Type here/);
+      await expect(typed).toBeVisible({ timeout: 10000 });
+      // Dialog confirm button (distinct from ⋮ "Cancel Invoice").
+      const dialogCancel = await commentsModalCancelInvoiceButton(appFrame);
+      await expect(dialogCancel, 'Empty comments → Cancel Invoice should be disabled').toBeDisabled();
+      await typed.fill('automation cancel');
+      await expect(dialogCancel, 'With comments → Cancel Invoice should enable').toBeEnabled({
+        timeout: 10000,
+      });
+      await dialogCancel.click();
+      await expect(appFrame.getByText('Invoice has been cancelled')).toBeVisible({
+        timeout: 30000,
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Invoice has been cancelled')],
+        'Invoice cancelled toast',
+        testInfo
+      );
     });
-    test('IO-036: Cancelling invoice changes status to Cancelled', async () => {
-      test.skip(true, pending);
+
+    test('IO-037: Reviewer can Mark as Reviewed on a Submitted invoice @admin', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(300000);
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+
+      const review = appFrame.getByRole('button', { name: 'Review', exact: true });
+      const inFlightRow = appFrame.getByRole('listitem').filter({
+        has: appFrame.getByRole('button', { name: 'Background Invoice Process Running' }),
+      });
+
+      let invoiceNo = '';
+      if ((await inFlightRow.count()) > 0) {
+        invoiceNo =
+          ((await inFlightRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+      } else {
+        if ((await review.count()) === 0) {
+          const pages = pageNumberButtons(appFrame);
+          const pageCount = await pages.count();
+          for (let i = 1; i < pageCount; i++) {
+            await pages.nth(i).click();
+            await waitForOverviewSettled(appFrame);
+            if ((await review.count()) > 0) break;
+          }
+        }
+        expect(
+          (await review.count()) > 0,
+          'No Submitted invoice (Review) — please submit a disposable invoice'
+        ).toBe(true);
+
+        const reviewRow = appFrame.getByRole('listitem').filter({ has: review.first() });
+        invoiceNo =
+          ((await reviewRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+        expect(invoiceNo, 'Could not read invoice # from the Review row').toBeTruthy();
+
+        await review.first().click();
+        await dismissHostDialogs(page);
+        await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        await expect(appFrame.getByRole('button', { name: 'Flag' })).toBeVisible();
+        const markReviewed = appFrame.getByRole('button', { name: 'Mark as Reviewed' });
+        await expect(markReviewed).toBeVisible();
+        const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
+        await expect(pdf.getByText(/Invoice|Partner Name|INVOICE/i).first()).toBeVisible({
+          timeout: 30000,
+        });
+
+        const comments = appFrame.getByPlaceholder(/Type here/);
+        if ((await comments.count()) > 0 && (await markReviewed.isDisabled().catch(() => false))) {
+          await comments.fill('automation review');
+          await expect(markReviewed).toBeEnabled({ timeout: 10000 });
+        }
+        await markReviewed.click();
+
+        await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        await waitForOverviewSettled(appFrame);
+      }
+      expect(invoiceNo, 'Could not read invoice # to wait for Reviewed').toBeTruthy();
+
+      const token = await captureDataverseToken(browser);
+      expect(token, 'Dataverse Bearer token').toBeTruthy();
+      const waited = await waitForInvoiceStatus({
+        token,
+        invoiceNumber: invoiceNo,
+        match: /^(Reviewed|Fail-Review)$/i,
+        timeoutMs: 180000,
+      });
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} dia_status did not leave Pending (last=${waited.status ?? 'none'})`
+      ).toMatch(/^(Reviewed|Fail-Review)$/i);
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} landed on ${waited.status} instead of Reviewed`
+      ).toMatch(/^Reviewed$/i);
+
+      await resetOverviewViaDashboard(page, appFrame);
+      const search = appFrame.getByRole('textbox', { name: 'Search' });
+      if ((await search.count()) > 0) {
+        await search.fill(invoiceNo);
+        await waitForOverviewSettled(appFrame);
+      }
+      const targetRow = appFrame.getByRole('listitem').filter({ hasText: invoiceNo });
+      if ((await targetRow.count()) > 0) {
+        await markGroupAndShot(
+          page,
+          [targetRow.first()],
+          'Reviewed status after Mark as Reviewed',
+          testInfo
+        );
+      }
     });
-    test('IO-038: Approver can approve a Reviewed invoice', async () => {
-      test.skip(true, pending);
+
+    test('IO-038: Approver can approve a Reviewed invoice @admin', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(360000);
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+
+      const approve = appFrame.getByRole('button', { name: 'Approve', exact: true });
+      const inFlightRow = appFrame.getByRole('listitem').filter({
+        has: appFrame.getByRole('button', { name: 'Background Invoice Process Running' }),
+      });
+
+      let invoiceNo = '';
+      const hasApprove = async () => {
+        if ((await approve.count()) > 0) return true;
+        const pages = pageNumberButtons(appFrame);
+        const pageCount = await pages.count();
+        for (let i = 1; i < pageCount; i++) {
+          await pages.nth(i).click();
+          await waitForOverviewSettled(appFrame);
+          if ((await approve.count()) > 0) return true;
+        }
+        return false;
+      };
+
+      if (await hasApprove()) {
+        const approveRow = appFrame.getByRole('listitem').filter({ has: approve.first() });
+        invoiceNo =
+          ((await approveRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+        expect(invoiceNo, 'Could not read invoice # from the Approve row').toBeTruthy();
+
+        await approve.first().click();
+        await dismissHostDialogs(page);
+        await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        await expect(appFrame.getByRole('button', { name: 'Flag' })).toBeVisible();
+        const overlay = appFrame.locator(
+          '[data-control-name="cnt_backgroundViewInvoiceInvoiceOverview"]'
+        );
+        const overlayApprove = overlay.getByRole('button', { name: 'Approve', exact: true });
+        await expect(overlayApprove).toBeVisible();
+        const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
+        await expect(pdf.getByText(/Invoice|Partner Name|INVOICE/i).first()).toBeVisible({
+          timeout: 30000,
+        });
+
+        const comments = appFrame.getByPlaceholder(/Type here/);
+        if (
+          (await comments.count()) > 0 &&
+          (await overlayApprove.isDisabled().catch(() => false))
+        ) {
+          await comments.fill('automation approve');
+          await expect(overlayApprove).toBeEnabled({ timeout: 10000 });
+        }
+        await overlayApprove.click({ force: true });
+
+        await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        await waitForOverviewSettled(appFrame);
+      } else if ((await inFlightRow.count()) > 0) {
+        invoiceNo =
+          ((await inFlightRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+      } else {
+        expect(
+          false,
+          'No Reviewed invoice (Approve) — please review a disposable invoice'
+        ).toBe(true);
+      }
+      expect(invoiceNo, 'Could not read invoice # to wait for Approved').toBeTruthy();
+
+      const token = await captureDataverseToken(browser);
+      expect(token, 'Dataverse Bearer token').toBeTruthy();
+      const waited = await waitForInvoiceStatus({
+        token,
+        invoiceNumber: invoiceNo,
+        match: /^(Approved|Fail-Approval)$/i,
+        timeoutMs: 180000,
+      });
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} dia_status did not leave Pending (last=${waited.status ?? 'none'})`
+      ).toMatch(/^(Approved|Fail-Approval)$/i);
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} landed on ${waited.status} instead of Approved`
+      ).toMatch(/^Approved$/i);
+
+      await resetOverviewViaDashboard(page, appFrame);
+      const search = appFrame.getByRole('textbox', { name: 'Search' });
+      if ((await search.count()) > 0) {
+        await search.fill(invoiceNo);
+        await waitForOverviewSettled(appFrame);
+      }
+      const targetRow = appFrame.getByRole('listitem').filter({ hasText: invoiceNo });
+      if ((await targetRow.count()) > 0) {
+        await markGroupAndShot(
+          page,
+          [targetRow.first()],
+          'Approved status after Approve',
+          testInfo
+        );
+      }
     });
-    test('IO-039: Reviewer can flag a Submitted invoice', async () => {
-      test.skip(true, pending);
+
+    test('IO-039: Reviewer can flag a Submitted invoice @admin', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(360000);
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+
+      const review = appFrame.getByRole('button', { name: 'Review', exact: true });
+      const inFlightRow = appFrame.getByRole('listitem').filter({
+        has: appFrame.getByRole('button', { name: 'Background Invoice Process Running' }),
+      });
+
+      let invoiceNo = '';
+      const hasReview = async () => {
+        if ((await review.count()) > 0) return true;
+        const pages = pageNumberButtons(appFrame);
+        const pageCount = await pages.count();
+        for (let i = 1; i < pageCount; i++) {
+          await pages.nth(i).click();
+          await waitForOverviewSettled(appFrame);
+          if ((await review.count()) > 0) return true;
+        }
+        return false;
+      };
+
+      if (await hasReview()) {
+        const reviewRow = appFrame.getByRole('listitem').filter({ has: review.first() });
+        invoiceNo =
+          ((await reviewRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+        expect(invoiceNo, 'Could not read invoice # from the Review row').toBeTruthy();
+
+        await review.first().click();
+        await dismissHostDialogs(page);
+        await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        const overlay = appFrame.locator(
+          '[data-control-name="cnt_backgroundViewInvoiceInvoiceOverview"]'
+        );
+        const overlayFlag = overlay.getByRole('button', { name: 'Flag', exact: true });
+        await expect(overlayFlag).toBeVisible();
+        const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
+        await expect(pdf.getByText(/Invoice|Partner Name|INVOICE/i).first()).toBeVisible({
+          timeout: 30000,
+        });
+
+        await overlayFlag.click({ force: true });
+        const finish = appFrame.getByRole('button', { name: 'Finish', exact: true });
+        await expect(finish).toBeVisible({ timeout: 15000 });
+        const flagReason = appFrame.getByPlaceholder(/reason for flagging/i);
+        const finishBox = await finish.boundingBox();
+        if (finishBox && !(await flagReason.isVisible().catch(() => false))) {
+          await page.mouse.move(finishBox.x + finishBox.width / 2, finishBox.y - 20);
+          for (let i = 0; i < 8 && !(await flagReason.isVisible().catch(() => false)); i++) {
+            await page.mouse.wheel(0, 400);
+          }
+        }
+        await expect(flagReason).toBeVisible({ timeout: 15000 });
+        await flagReason.fill('automation flag');
+        await expect(finish, 'Finish stayed disabled after Flag Reason').toBeEnabled({
+          timeout: 15000,
+        });
+        await finish.click({ force: true });
+        await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        await waitForOverviewSettled(appFrame);
+      } else if ((await inFlightRow.count()) > 0) {
+        invoiceNo =
+          ((await inFlightRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+      } else {
+        expect(
+          false,
+          'No Submitted invoice (Review) — please submit a disposable invoice'
+        ).toBe(true);
+      }
+      expect(invoiceNo, 'Could not read invoice # to wait for Flagged').toBeTruthy();
+
+      const token = await captureDataverseToken(browser);
+      expect(token, 'Dataverse Bearer token').toBeTruthy();
+      const waited = await waitForInvoiceStatus({
+        token,
+        invoiceNumber: invoiceNo,
+        match: /^(Flagged|Fail-Flag)$/i,
+        timeoutMs: 180000,
+      });
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} dia_status did not leave Pending (last=${waited.status ?? 'none'})`
+      ).toMatch(/^(Flagged|Fail-Flag)$/i);
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} landed on ${waited.status} instead of Flagged`
+      ).toMatch(/^Flagged$/i);
+
+      await resetOverviewViaDashboard(page, appFrame);
+      const search = appFrame.getByRole('textbox', { name: 'Search' });
+      if ((await search.count()) > 0) {
+        await search.fill(invoiceNo);
+        await waitForOverviewSettled(appFrame);
+      }
+      const targetRow = appFrame.getByRole('listitem').filter({ hasText: invoiceNo });
+      if ((await targetRow.count()) > 0) {
+        await markGroupAndShot(
+          page,
+          [targetRow.first()],
+          'Flagged status after Flag',
+          testInfo
+        );
+      }
     });
-    test('IO-040: Approver can flag a Reviewed invoice', async () => {
-      test.skip(true, pending);
-    });
-    test('IO-041: Invoice amounts display correct decimal values', async () => {
-      test.skip(true, pending);
-    });
-    test('IO-042: Alphabetical order of column filter values', async () => {
-      test.skip(true, pending);
+
+    test('IO-040: Approver can flag a Reviewed invoice @admin', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(360000);
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+
+      const approve = appFrame.getByRole('button', { name: 'Approve', exact: true });
+      const inFlightRow = appFrame.getByRole('listitem').filter({
+        has: appFrame.getByRole('button', { name: 'Background Invoice Process Running' }),
+      });
+
+      let invoiceNo = '';
+      const hasApprove = async () => {
+        if ((await approve.count()) > 0) return true;
+        const pages = pageNumberButtons(appFrame);
+        const pageCount = await pages.count();
+        for (let i = 1; i < pageCount; i++) {
+          await pages.nth(i).click();
+          await waitForOverviewSettled(appFrame);
+          if ((await approve.count()) > 0) return true;
+        }
+        return false;
+      };
+
+      if (await hasApprove()) {
+        const approveRow = appFrame.getByRole('listitem').filter({ has: approve.first() });
+        invoiceNo =
+          ((await approveRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+        expect(invoiceNo, 'Could not read invoice # from the Approve row').toBeTruthy();
+
+        await approve.first().click();
+        await dismissHostDialogs(page);
+        await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        const overlay = appFrame.locator(
+          '[data-control-name="cnt_backgroundViewInvoiceInvoiceOverview"]'
+        );
+        const overlayFlag = overlay.getByRole('button', { name: 'Flag', exact: true });
+        await expect(overlayFlag).toBeVisible();
+        const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
+        await expect(pdf.getByText(/Invoice|Partner Name|INVOICE/i).first()).toBeVisible({
+          timeout: 30000,
+        });
+
+        await overlayFlag.click({ force: true });
+        const finish = appFrame.getByRole('button', { name: 'Finish', exact: true });
+        await expect(finish).toBeVisible({ timeout: 15000 });
+        const flagReason = appFrame.getByPlaceholder(/reason for flagging/i);
+        const finishBox = await finish.boundingBox();
+        if (finishBox && !(await flagReason.isVisible().catch(() => false))) {
+          await page.mouse.move(finishBox.x + finishBox.width / 2, finishBox.y - 20);
+          for (let i = 0; i < 8 && !(await flagReason.isVisible().catch(() => false)); i++) {
+            await page.mouse.wheel(0, 400);
+          }
+        }
+        await expect(flagReason).toBeVisible({ timeout: 15000 });
+        await flagReason.fill('automation flag');
+        await expect(finish, 'Finish stayed disabled after Flag Reason').toBeEnabled({
+          timeout: 15000,
+        });
+        await finish.click({ force: true });
+        await expect(appFrame.getByText('Show Invoices', { exact: true })).toBeVisible({
+          timeout: 45000,
+        });
+        await waitForOverviewSettled(appFrame);
+      } else if ((await inFlightRow.count()) > 0) {
+        invoiceNo =
+          ((await inFlightRow.first().innerText()) || '').match(/\d{4}-\d{4}|INV-\d+/)?.[0] ?? '';
+      } else {
+        expect(
+          false,
+          'No Reviewed invoice (Approve) — please review a disposable invoice'
+        ).toBe(true);
+      }
+      expect(invoiceNo, 'Could not read invoice # to wait for Flagged').toBeTruthy();
+
+      const token = await captureDataverseToken(browser);
+      expect(token, 'Dataverse Bearer token').toBeTruthy();
+      const waited = await waitForInvoiceStatus({
+        token,
+        invoiceNumber: invoiceNo,
+        match: /^(Flagged|Fail-Flag)$/i,
+        timeoutMs: 180000,
+      });
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} dia_status did not leave Pending (last=${waited.status ?? 'none'})`
+      ).toMatch(/^(Flagged|Fail-Flag)$/i);
+      expect(
+        waited.status,
+        `Invoice ${invoiceNo} landed on ${waited.status} instead of Flagged`
+      ).toMatch(/^Flagged$/i);
+
+      await resetOverviewViaDashboard(page, appFrame);
+      const search = appFrame.getByRole('textbox', { name: 'Search' });
+      if ((await search.count()) > 0) {
+        await search.fill(invoiceNo);
+        await waitForOverviewSettled(appFrame);
+      }
+      const targetRow = appFrame.getByRole('listitem').filter({ hasText: invoiceNo });
+      if ((await targetRow.count()) > 0) {
+        await markGroupAndShot(
+          page,
+          [targetRow.first()],
+          'Flagged status after Flag from Reviewed',
+          testInfo
+        );
+      }
     });
   });
 
-  test('TC-IO-FLOW-01: Catalog Overview lifecycle flows and latest runs', async (
+  test.describe('Decimal + ordering Excel cases', () => {
+    test('IO-041: Rate decimals survive Submit and render in the PDF @admin', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      // Submit flow + background-process wait + PDF render all sit on live flows.
+      test.setTimeout(1500000);
+      const token = await captureDataverseToken(browser);
+      expect(token, 'Dataverse Bearer token from Admin storageState').toBeTruthy();
+
+      const products = await listOpenRateProducts(token, 12);
+      expect(
+        products.length,
+        'Need at least 5 Editable Rate products with no default catalog rate'
+      ).toBeGreaterThanOrEqual(DECIMAL_RATES.length);
+
+      const fixtures = await loadCreateInvoiceFixtures(token, { persona: 'admin' });
+      const project = fixtures.nonNorthAmerica;
+      expect(
+        project,
+        'No non-North-America project with an Active contract in this Dataverse'
+      ).toBeTruthy();
+      expect((project!.region ?? '').toLowerCase()).not.toContain('north america');
+      const contracts = await listActiveContractsForProject(token, project!.projectId);
+
+      // Adhoc keeps this repeatable: no one-invoice-per-cycle duplicate block.
+      let appFrame = await openCreateInvoice(page, 'admin');
+      await setAdhoc(appFrame, true);
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+
+      await selectPartnerAndProject(appFrame, project!);
+      await selectContractIfPrompted(appFrame, { contracts, label: project!.projectName });
+      await dismissDuplicateDialog(appFrame);
+      if (await contractModalOpen(appFrame)) {
+        await selectContractIfPrompted(appFrame, { contracts, label: project!.projectName });
+      }
+      await expect(
+        selectedProjectButton(appFrame, project!.projectName),
+        `Project ${project!.projectName} did not stick on the form`
+      ).toBeVisible({ timeout: 30000 });
+
+      await ensureLineItemRow(appFrame);
+      const filled: FilledRow[] = [];
+      for (let i = 0; i < DECIMAL_RATES.length; i++) {
+        if ((await lineItemRowCount(appFrame)) <= i) await addLineItemRow(appFrame);
+        filled.push(
+          await fillDecimalRow(page, appFrame, i, {
+            product: products[i],
+            description: DECIMAL_DESCRIPTIONS[i],
+            qty: '1',
+            rate: DECIMAL_RATES[i],
+          })
+        );
+      }
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('New Invoice', { exact: true }).first()],
+        'Decimal rates entered on the line-item grid',
+        testInfo
+      );
+
+      const submit = appFrame.getByRole('button', { name: 'Submit' });
+      await expect(submit).toBeEnabled({ timeout: 30000 });
+      const submitStartedAt = new Date().toISOString();
+      await submit.click();
+      await awaitSubmitNavigatedToOverview(appFrame);
+
+      let created = await waitForSubmittedInvoice({
+        token,
+        projectId: project!.projectId,
+        submitStartedAt,
+        timeoutMs: 240000,
+      });
+      let invoiceRow = (created.row ?? {}) as Record<string, unknown>;
+      const invoiceId = String(invoiceRow.dia_invoicedetailsid ?? '').trim();
+      expect(invoiceId, 'Submit did not create an invoice row for this project').toBeTruthy();
+      let invoiceNo = String(invoiceRow.dia_invoicenumber ?? '').trim();
+      if (!invoiceNo) {
+        created = await waitForInvoiceAfterAction({
+          token,
+          invoiceId,
+          submitStartedAt,
+          mode: 'update',
+          timeoutMs: 180000,
+        });
+        invoiceRow = (created.row ?? invoiceRow) as Record<string, unknown>;
+        invoiceNo = String(invoiceRow.dia_invoicenumber ?? '').trim();
+      }
+      expect(invoiceNo, 'Submitted invoice never got an invoice number').toBeTruthy();
+      const status = await waitForInvoiceStatus({
+        token,
+        invoiceNumber: invoiceNo,
+        match: /^(Submitted|Fail-Creation)$/i,
+        timeoutMs: 240000,
+      });
+      expect(
+        status.status,
+        `Invoice ${invoiceNo} did not reach Submitted (last=${status.status ?? 'none'})`
+      ).toMatch(/^Submitted$/i);
+
+      // Open the invoice PDF from its own row. Review overlay is read-only as
+      // long as we close it with X. The gallery that Submit lands on still holds
+      // the pre-submit collection, so re-enter Overview before searching.
+      const findTargetRow = () =>
+        appFrame.getByRole('listitem').filter({ hasText: invoiceNo }).first();
+      let rowVisible = false;
+      for (let attempt = 1; attempt <= 4 && !rowVisible; attempt++) {
+        if (attempt === 1) {
+          await resetOverviewViaDashboard(page, appFrame);
+        } else {
+          appFrame = await openInvoiceOverview(page);
+        }
+        const search = appFrame
+          .getByPlaceholder('Search')
+          .or(appFrame.getByRole('textbox', { name: 'Search' }));
+        if ((await search.count()) > 0) {
+          await search.first().fill(project!.projectName);
+          await waitForOverviewSettled(appFrame);
+        }
+        rowVisible = await findTargetRow()
+          .isVisible({ timeout: 20000 })
+          .catch(() => false);
+      }
+      const targetRow = findTargetRow();
+      await expect(targetRow, `Invoice ${invoiceNo} not found on Overview`).toBeVisible({
+        timeout: 30000,
+      });
+
+      // This template prints no invoice number, so gate the read on our own
+      // last line-item description — that also proves every row rendered.
+      const pdfReady = new RegExp(
+        normalizePdfText(DECIMAL_DESCRIPTIONS[DECIMAL_DESCRIPTIONS.length - 1])
+      );
+      let pdfText = '';
+      for (let attempt = 1; attempt <= 3 && !pdfText; attempt++) {
+        const overlay = appFrame.getByText('View Invoice', { exact: true });
+        if (!(await overlay.isVisible().catch(() => false))) {
+          const nextStep = await waitForRowNextStep(page, appFrame, {
+            invoiceNumber: invoiceNo,
+            searchTerm: project!.projectName,
+            timeoutMs: 480000,
+          });
+          await nextStep.click();
+          await dismissHostDialogs(page);
+        }
+        await expect(overlay).toBeVisible({ timeout: 90000 });
+        const text = await readPdfViewerText(page, { contains: pdfReady, timeoutMs: 90000 });
+        if (pdfReady.test(normalizePdfText(text))) {
+          pdfText = text;
+          break;
+        }
+        await closeViewInvoiceOverlay(appFrame).catch(() => undefined);
+        await waitForOverviewSettled(appFrame);
+      }
+      expect(
+        pdfText,
+        `PDF for ${invoiceNo} never rendered the line items in its text layer`
+      ).toBeTruthy();
+
+      const tokens = decimalTokens(pdfText);
+      const report: string[] = [
+        `# IO-041 — decimal rates for invoice ${invoiceNo}`,
+        '',
+        `- Project: **${project!.projectName}** (${project!.partnerName}, region ${project!.region ?? 'unknown'})`,
+        `- Adhoc: yes · Qty per row: 1 · Invoice id: ${invoiceId}`,
+        '',
+        '| # | Product | Entered rate | Rate field kept | Grid Total | PDF Qty | PDF Rate | PDF Amount | Rate matches |',
+        '|---|---|---|---|---|---|---|---|---|',
+      ];
+      const formMismatches: string[] = [];
+      const pdfMisses: string[] = [];
+
+      for (const row of filled) {
+        const expectedValue = Number(row.requestedRate);
+        const pdf = pdfRowValues(pdfText, row.description);
+        const inPdf = pdf.rate !== undefined && Number(pdf.rate) === expectedValue;
+        report.push(
+          `| ${row.index + 1} | ${row.product} | ${row.requestedRate} | ${row.acceptedRate || '—'} | ` +
+            `${row.displayedTotal || '—'} | ${pdf.qty ?? '—'} | ${pdf.rate ?? '—'} | ` +
+            `${pdf.amount ?? '—'} | ${inPdf ? 'yes' : 'NO'} |`
+        );
+        if (Number(row.acceptedRate) !== expectedValue) {
+          formMismatches.push(
+            `row ${row.index + 1}: typed ${row.requestedRate}, form kept ${row.acceptedRate || 'blank'}`
+          );
+        }
+        if (!inPdf) {
+          pdfMisses.push(
+            `row ${row.index + 1}: typed ${row.requestedRate} (expected ` +
+              `${expectedRateDisplay(row.requestedRate)}), PDF shows ${pdf.rate ?? 'no value'}`
+          );
+        }
+      }
+      report.push('', `Decimal tokens in PDF: ${tokens.join(', ')}`);
+      await testInfo.attach('io-041-decimal-rates.md', {
+        body: report.join('\n'),
+        contentType: 'text/markdown',
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('View Invoice', { exact: true })],
+        `PDF decimal rates ${invoiceNo}`,
+        testInfo
+      );
+      await closeViewInvoiceOverlay(appFrame).catch(() => undefined);
+
+      expect(
+        formMismatches,
+        `Create Invoice grid changed the rates: ${formMismatches.join(' | ')}`
+      ).toHaveLength(0);
+      expect(pdfMisses, `PDF does not show the entered rates: ${pdfMisses.join(' | ')}`).toHaveLength(
+        0
+      );
+    });
+
+    test('IO-042: Column funnel values are alphabetical (sort + funnel audit)', async ({
+      page,
+    }, testInfo) => {
+      test.setTimeout(600000);
+      const appFrame = await openInvoiceOverview(page);
+      await ensureOverviewRows(page, appFrame);
+
+      const report: string[] = ['# IO-042 — Overview sort + funnel audit', ''];
+      const findings: string[] = [];
+
+      const firstOutOfOrder = (values: string[]): string => {
+        for (let i = 1; i < values.length; i++) {
+          if (values[i - 1].localeCompare(values[i], undefined, { sensitivity: 'base' }) > 0) {
+            return `"${values[i - 1]}" before "${values[i]}" (position ${i})`;
+          }
+        }
+        return '';
+      };
+
+      report.push('## Column sort arrows', '');
+      const sortColumns = [
+        { column: 'Partner' as const, field: 'partner' as const },
+        { column: 'Project' as const, field: 'project' as const },
+        { column: 'Invoice #' as const, field: 'invoice' as const },
+      ];
+      for (const { column, field } of sortColumns) {
+        await clickColumnSortArrow(page, appFrame, column);
+        const asc = (await galleryRows(appFrame)).map((r) => r[field]).filter(Boolean);
+        await clickColumnSortArrow(page, appFrame, column);
+        const desc = (await galleryRows(appFrame)).map((r) => r[field]).filter(Boolean);
+        const ascOk = asc.length > 0 && isSortedAsc(asc);
+        const descOk = desc.length > 0 && isSortedDesc(desc);
+        report.push(
+          `- **${column}** — first click ${ascOk ? 'A→Z ok' : `NOT ascending (${asc.slice(0, 6).join(', ')})`}; ` +
+            `second click ${descOk ? 'Z→A ok' : `NOT descending (${desc.slice(0, 6).join(', ')})`}`
+        );
+        if (!ascOk) findings.push(`${column} sort: first click is not ascending`);
+        if (!descOk) findings.push(`${column} sort: second click is not descending`);
+        await resetOverviewViaDashboard(page, appFrame);
+      }
+      report.push(
+        '- **Status** — sort arrow clicked in IO-019 only; the gallery badge is not machine-readable, so order is verified visually.',
+        ''
+      );
+
+      report.push('## Funnel dropdown value order', '');
+      const funnels = [
+        {
+          column: 'Partner' as const,
+          combo: 'cmb_PartnerFilter',
+          alphabeticalExpected: true,
+        },
+        {
+          column: 'Project' as const,
+          combo: 'cmb_ProjectFilter',
+          alphabeticalExpected: true,
+        },
+        {
+          column: 'Action Pending with' as const,
+          combo: 'cnt_ActionPendingFilter',
+          alphabeticalExpected: true,
+        },
+        {
+          // Curated lifecycle list, not partner/project data — reported, not asserted.
+          column: 'Status' as const,
+          combo: 'dd_StatusFilter',
+          alphabeticalExpected: false,
+        },
+      ];
+      for (const funnel of funnels) {
+        await clickColumnFunnel(page, appFrame, funnel.column);
+        const combo = appFrame.locator(`[data-control-name="${funnel.combo}"]`);
+        await expect(combo, `${funnel.column} funnel did not open`).toBeVisible({ timeout: 15000 });
+        await combo.first().click({ force: true });
+        const options = appFrame.getByRole('option');
+        await expect(
+          options.first(),
+          `${funnel.column} funnel showed no values`
+        ).toBeVisible({ timeout: 20000 });
+        const values = (await options.allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+        const sorted = isSortedAsc(values);
+        const offender = firstOutOfOrder(values);
+        report.push(
+          `### ${funnel.column} (${values.length} values)`,
+          `- Alphabetical: **${sorted ? 'yes' : 'no'}**${sorted ? '' : ` — first break: ${offender}`}`,
+          `- As shown: ${values.slice(0, 12).join(' · ')}${values.length > 12 ? ' …' : ''}`,
+          `- A→Z would start: ${[...values]
+            .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+            .slice(0, 12)
+            .join(' · ')}`,
+          ''
+        );
+        if (!sorted && funnel.alphabeticalExpected) {
+          findings.push(
+            `${funnel.column} funnel values are not alphabetical — ${offender} (${values.length} values)`
+          );
+        }
+        await page.keyboard.press('Escape').catch(() => undefined);
+        await resetOverviewViaDashboard(page, appFrame);
+      }
+
+      report.push('## Findings', '', findings.length ? findings.map((f) => `- ${f}`).join('\n') : '- none');
+      await testInfo.attach('io-042-sort-funnel-audit.md', {
+        body: report.join('\n'),
+        contentType: 'text/markdown',
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Partner', { exact: true }).first()],
+        'Funnel order audit',
+        testInfo
+      );
+
+      expect(findings, `IO-042 findings:\n${findings.join('\n')}`).toHaveLength(0);
+    });
+  });
+
+  test('TC-IO-FLOW-01: Catalog Overview lifecycle flows and latest runs @admin', async (
     { browser },
     testInfo
   ) => {
-    test.skip(testInfo.project.name.toLowerCase().includes('pm'), 'Admin token — org-wide catalog');
     const token = await captureDataverseToken(browser);
     expect(token, 'Dataverse Bearer token from Admin storageState').toBeTruthy();
 

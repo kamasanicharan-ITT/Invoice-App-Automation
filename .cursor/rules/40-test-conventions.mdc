@@ -26,6 +26,7 @@ Generated specs begin with the plan + seed reference comments:
 ## Naming
 
 - Test IDs: `TC-DB-*` / `TC-DV-*` (Dashboard), `CI-*` / `TC-CI-*` / `TC-CIF-*` (Create Invoice), `TC-IO-*` / `IO-*` (Overview).
+- Role-only cases append `@admin` or `@pm` in the title. Playwright projects use `grepInvert` so Admin never schedules `@pm` tests and PM never schedules `@admin` tests. Shared cases have neither tag.
 - `describe` matches the screen (`Dashboard Screen`, `Create Invoice Screen`, `Invoice Overview Screen`).
 - One spec file per screen: `tests/dashboard-screen.spec.ts`, `create-invoice-screen.spec.ts`, `invoice-overview-screen.spec.ts`.
 

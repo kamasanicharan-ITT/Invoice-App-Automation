@@ -36,24 +36,44 @@ export default defineConfig({
   use: {
     baseURL: env.appUrl,
     headless: !!process.env.CI,
+    // Overview ⋮ / Next Step sit on the far right — narrow viewports clip them.
+    viewport: { width: 1920, height: 1080 },
     screenshot: 'on',
     video: 'retain-on-failure',
     trace: 'retain-on-failure',
   },
 
   projects: [
-    // Default alias → admin (bare `npx playwright test` / MCP chromium)
+    // Role-only cases are tagged @admin / @pm in the test title so they are
+    // not even scheduled on the other persona (no skip noise in the report).
+    // Shared cases have neither tag and run on both.
+    // viewport AFTER Desktop Chrome — device preset is 1280x720 and clips Overview ⋮.
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'], storageState: env.authAdmin },
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1920, height: 1080 },
+        storageState: env.authAdmin,
+      },
+      grepInvert: /@pm\b/,
     },
     {
       name: 'chromium-admin',
-      use: { ...devices['Desktop Chrome'], storageState: env.authAdmin },
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1920, height: 1080 },
+        storageState: env.authAdmin,
+      },
+      grepInvert: /@pm\b/,
     },
     {
       name: 'chromium-pm',
-      use: { ...devices['Desktop Chrome'], storageState: env.authPm },
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1920, height: 1080 },
+        storageState: env.authPm,
+      },
+      grepInvert: /@admin\b/,
     },
   ],
 });
