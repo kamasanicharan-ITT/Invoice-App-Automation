@@ -45,6 +45,21 @@ Generated specs begin with the plan + seed reference comments:
 - `expect.soft` for UI structure visibility; hard `expect` for interaction/navigation.
 - Prefer regex over literal counts for dynamic values.
 
+## Local run artifacts
+
+Do not write test logs, probe screenshots, or probe notes in the repo root.
+Put them under `test-log-details/`:
+
+| Kind | Path |
+|------|------|
+| Redirected Playwright run output (`test-run-*.log`) | `test-log-details/logs/` |
+| Ad-hoc / probe screenshots (`*.png`) | `test-log-details/screenshots/` |
+| Probe notes (`*.md`) | `test-log-details/notes/` |
+
+Playwright's own report output stays where CI expects it: `test-results/`,
+`playwright-report/`, `allure-results/`, `allure-report/`. Marked evidence from
+`tests/utils/screenshot.ts` still uses `testInfo.outputPath` (under `test-results/`).
+
 ## Marked screenshots (evidence)
 
 Every test should capture clear, self-explanatory evidence using the shared utility

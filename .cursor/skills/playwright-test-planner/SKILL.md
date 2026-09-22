@@ -18,6 +18,7 @@ Use the `playwright-test` MCP server. Key tools:
 `browser_click`, `browser_hover`, `browser_type`, `browser_select_option`,
 `browser_press_key`, `browser_wait_for`, `browser_network_requests`, `planner_save_plan`.
 Do NOT take screenshots unless absolutely necessary — prefer the snapshot.
+If a screenshot is required, save it under `test-log-details/screenshots/`, never in the repo root.
 
 ## Workflow
 

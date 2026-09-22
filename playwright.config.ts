@@ -26,6 +26,16 @@ export default defineConfig({
     ['list'],
     ['html', { open: 'never' }],
     ['junit', { outputFile: 'test-results/junit.xml' }],
+    // Raw Allure files. The pipeline turns this folder into one HTML file
+    // (see allurerc.json) and publishes it as an artifact. A later Azure
+    // DevOps extension can publish the same folder as an in-run tab.
+    ['allure-playwright', {
+      resultsDir: 'allure-results',
+      environmentInfo: {
+        ENV: process.env.ENV ?? 'dev',
+        App: 'Invoice Canvas',
+      },
+    }],
   ],
 
   // Azure Pipelines / any CI sets CI=true. Agents have no UI — must be headless.

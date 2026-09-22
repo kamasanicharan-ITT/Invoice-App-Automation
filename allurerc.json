@@ -1,0 +1,12 @@
+{
+  "name": "Invoice E2E",
+  "output": "./allure-report",
+  "plugins": {
+    "awesome": {
+      "options": {
+        "singleFile": true,
+        "reportLanguage": "en"
+      }
+    }
+  }
+}

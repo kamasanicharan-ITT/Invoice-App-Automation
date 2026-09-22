@@ -115,7 +115,7 @@ Helpers: `tests/utils/invoice-overview-ui.ts`.
 
 | ID | Why it is parked |
 |----|------------------|
-| IO-033 | Superseded — live app deletes Draft with no confirm popup |
+| — | None for Delete Draft — IO-033 clicks Delete Draft and asserts the row is gone with no popup |
 
 **Batch 1 locked & scripted (15 Sep 2026):** IO-008, 009, 016–022, 029, 030, 032b, 034, 035, 036.
 
@@ -125,8 +125,8 @@ Helpers: `tests/utils/invoice-overview-ui.ts`.
 
 | Case | Live behaviour | Expected |
 |------|----------------|----------|
-| IO-041 | PDF (non-NA template) prints Rate/Amount at 2 decimals — 1.123 and 1.1234 both render `AU$1.12`; grid Total and invoice Total (`AU$6.65` for 6.6564) round the same way. Rate field and Dataverse `dia_rate` keep all 4 decimals. | Rate and Total shown to 4 decimals |
-| IO-042 | Partner (194), Project (294) and Action Pending with (14) funnel value lists come back in creation order, not A→Z. Sort arrows on Partner / Project / Invoice # work both directions. | Funnel value lists alphabetical |
+| IO-041 | PDF (non-NA template) prints Rate/Amount at **2 decimals** — `2`→`2.00`, `1.2`→`1.20`, `1.21`→`1.21`, `1.123`→`1.12`, `1.1234`→`1.12`. Intended product rule. | Rate and Amount on the PDF at 2 decimal places |
+| IO-042 | Funnel value lists are not A→Z (creation order). **Not a defect** — funnels only filter. Sort arrows on Partner / Project / Invoice # work; Action Pending has filter only. | Funnel selected value filters the gallery; sorts low→high |
 | IO-041 side finding | Overview **Search** does not match an invoice number such as `INV-104502`; the same row is found by project name. Non-NA invoices also number `INV-1045xx` rather than `2026-xxxx`. | Confirm expected |
 
 Mutating lifecycle (Mark as Reviewed, Flag, Approve, Send Instantly from ⋮) stays out of the suite until you give fixtures and expected overlays.

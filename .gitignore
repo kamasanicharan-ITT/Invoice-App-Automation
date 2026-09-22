@@ -3,6 +3,8 @@
 node_modules/
 /test-results/
 /playwright-report/
+/allure-results/
+/allure-report/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
@@ -19,4 +21,10 @@ run-group*.json
 /test-run-*.log
 /overview-*.png
 /overview-*.md
+
+# Local test-run logs, probe screenshots, and notes.
+# Keep the folder markers; ignore everything else.
+/test-log-details/**
+!/test-log-details/**/
+!/test-log-details/**/.gitkeep
 

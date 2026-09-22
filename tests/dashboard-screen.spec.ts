@@ -5,6 +5,7 @@ import { test, expect, request, type Page, type FrameLocator, type Request, type
 import { APP_URL, DATAVERSE_URL } from '../config/env';
 import { markAndShot, markGroupAndShot, shot } from './utils/screenshot';
 import { dismissHostDialogs, dismissHostDialogsSettling } from './utils/host-dialogs';
+import { assertAppSession } from './utils/assert-app-session';
 
 const INVOICE_TABLE = 'dia_invoicedetailses';
 const MAIL_LIST_TABLE = 'dia_invoicemaillists';
@@ -471,6 +472,18 @@ async function getDashboardTaskCount(
 test.describe('Dashboard Screen', () => {
   test.describe.configure({ timeout: 120000 });
 
+  // Session gate: one open before any scheduled case (full file, --grep group, or
+  // a single test). Sign in / dead storageState fails this hook so later cases
+  // are skipped instead of each timing out. See tests/utils/assert-app-session.ts.
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    try {
+      await assertAppSession(page);
+    } finally {
+      await page.close();
+    }
+  });
+
   // Same UI for Admin (auth/admin.json) and PM (auth/pm.json).
   // Dataverse counts use org-wide vs user-scope via activePersonaScope (project name).
   // ── UI Structure (both roles) ─────────────────────────────────────────────
@@ -700,6 +713,7 @@ test.describe('Dashboard Screen', () => {
   // ── Dataverse Data Validation (UI count == Dataverse count) ─────────────────
 
   test.describe('Dataverse Validation', () => {
+    test.describe.configure({ timeout: 240000 });
     let dataverseToken = '';
 
     test.beforeAll(async ({ browser }, testInfo) => {
@@ -737,13 +751,35 @@ test.describe('Dashboard Screen', () => {
       testInfo: TestInfo,
       opts: { label: string; filter: string; pattern: RegExp; requireUnreported?: boolean }
     ): Promise<void> {
-      const apiCount = await getDataverseCount(dataverseToken, opts.filter, {
+      let apiCount = await getDataverseCount(dataverseToken, opts.filter, {
         requireUnreported: opts.requireUnreported,
       });
       const appFrame = await openDashboard(page);
-      const uiCount = await getDashboardTaskCount(appFrame, opts.pattern);
+      let uiCount = await getDashboardTaskCount(appFrame, opts.pattern);
 
       console.log(`${opts.label} — UI: ${uiCount} | Dataverse: ${apiCount}`);
+
+      // Canvas OnVisible collections can lag Dataverse. Leave and re-enter
+      // Dashboard so counts reload before treating a gap as a real fail.
+      if (uiCount !== apiCount) {
+        const dashboardNav = appFrame.getByRole('button', { name: 'Dashboard' });
+        const overviewNav = appFrame.getByRole('button', { name: 'Invoice Overview' });
+        for (let attempt = 1; attempt <= 3 && uiCount !== apiCount; attempt++) {
+          await overviewNav.click();
+          await dismissHostDialogs(page);
+          await expect(appFrame.getByText('Invoice Overview', { exact: true }).first()).toBeVisible({
+            timeout: 30000,
+          });
+          await dashboardNav.click();
+          await dismissHostDialogs(page);
+          await waitForDashboardReady(appFrame);
+          apiCount = await getDataverseCount(dataverseToken, opts.filter, {
+            requireUnreported: opts.requireUnreported,
+          });
+          uiCount = await getDashboardTaskCount(appFrame, opts.pattern);
+          console.log(`${opts.label} (resync ${attempt}) — UI: ${uiCount} | Dataverse: ${apiCount}`);
+        }
+      }
 
       if (uiCount !== apiCount) {
         await reportCountMismatch(testInfo, dataverseToken, {

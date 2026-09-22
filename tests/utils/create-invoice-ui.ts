@@ -15,6 +15,7 @@ export const TOAST = {
   submitted: /submitted/i,
   noActiveContract: /No active contracts found for the selected project/i,
   serviceEndAfterStart: /Service End Date must be after Start Date|after Start Date/i,
+  threeMonthLimit: /You are selecting an invoice date beyond the allowed 3-month limit/i,
 } as const;
 
 export const DUPLICATE = {
@@ -49,16 +50,28 @@ export function calendarMonthUsDates(reference = new Date()): { start: string; e
 }
 
 /**
- * Non-adhoc 3-month cap from the regression sheet (July → Sep 30 enabled, Oct 1 disabled):
- * last day of calendar month + 2.
+ * Non-adhoc PM window is the current calendar month plus the next three
+ * (September → last allowed 12/31, first blocked 1/1).
+ * month1 / month2 are mid-month dates inside that window (CI-021).
  */
 export function threeMonthCapUsDates(reference = new Date()): {
   lastAllowed: string;
   firstBlocked: string;
+  month1: string;
+  month2: string;
 } {
-  const lastAllowed = new Date(reference.getFullYear(), reference.getMonth() + 3, 0);
-  const firstBlocked = new Date(reference.getFullYear(), reference.getMonth() + 3, 1);
-  return { lastAllowed: formatUsDate(lastAllowed), firstBlocked: formatUsDate(firstBlocked) };
+  const y = reference.getFullYear();
+  const m = reference.getMonth();
+  const lastAllowed = new Date(y, m + 4, 0);
+  const firstBlocked = new Date(y, m + 4, 1);
+  const month1 = new Date(y, m, 15);
+  const month2 = new Date(y, m + 1, 15);
+  return {
+    lastAllowed: formatUsDate(lastAllowed),
+    firstBlocked: formatUsDate(firstBlocked),
+    month1: formatUsDate(month1),
+    month2: formatUsDate(month2),
+  };
 }
 
 /** First day of calendar month + 4 (August → 12/1). Inside a contract that runs through year-end. */
@@ -320,6 +333,15 @@ export async function readLineItems(appFrame: FrameLocator): Promise<UiLineItem[
 }
 
 export async function ensureLineItemRow(appFrame: FrameLocator): Promise<void> {
+  // Default radio is Start with last invoice — that mode has no blank line-item
+  // row until a previous invoice is chosen. Brand New always exposes Find items.
+  if ((await getLineItemCount(appFrame)) === 0) {
+    const startWithLast = appFrame.getByRole('radio', { name: 'Start with last invoice' });
+    if (await startWithLast.isChecked().catch(() => false)) {
+      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+    }
+  }
   if ((await getLineItemCount(appFrame)) === 0) {
     await appFrame.getByRole('button', { name: 'Add new item' }).click();
   }
@@ -346,24 +368,31 @@ export async function keepSingleLineItemRow(appFrame: FrameLocator): Promise<voi
  * Prefer a named delete img when it exists; otherwise click the right edge of the last row.
  */
 export async function clickLastLineItemDelete(appFrame: FrameLocator): Promise<boolean> {
-  const named = appFrame.getByRole('img', { name: /delete|trash|remove/i });
-  if ((await named.count()) > 0) {
-    await named.last().click();
-    const confirmNamed = appFrame.getByRole('button', { name: /^(Continue|Yes|OK|Delete)$/i });
-    if (await confirmNamed.first().isVisible({ timeout: 4000 }).catch(() => false)) {
-      await confirmNamed.first().click();
-    }
-    return true;
-  }
-
   const row = appFrame
     .getByRole('listitem')
     .filter({ has: appFrame.getByPlaceholder('Enter description') })
     .last();
   await expect(row).toBeVisible({ timeout: 10000 });
-  const box = await row.boundingBox();
-  if (!box || box.width < 40) return false;
-  await row.click({ position: { x: box.width - 16, y: Math.min(24, box.height / 2) } });
+
+  const named = row.getByRole('img', { name: /delete|trash|remove/i });
+  if ((await named.count()) > 0) {
+    await named.last().click({ force: true });
+  } else {
+    // Canvas trash is an unlabeled aria-hidden control on the row, not a named img
+    // (product combo chevrons are img and must not be clicked).
+    const trash = row.locator('[aria-hidden="true"]');
+    if ((await trash.count()) > 0) {
+      await trash.last().click({ force: true });
+    } else {
+      const box = await row.boundingBox();
+      if (!box || box.width < 40) return false;
+      await row.click({
+        position: { x: Math.max(8, box.width - 8), y: box.height / 2 },
+        force: true,
+      });
+    }
+  }
+
   const confirm = appFrame.getByRole('button', { name: /^(Continue|Yes|OK|Delete)$/i });
   if (await confirm.first().isVisible({ timeout: 4000 }).catch(() => false)) {
     await confirm.first().click();
@@ -381,7 +410,13 @@ export async function selectProduct(
 ): Promise<void> {
   await ensureLineItemRow(appFrame);
   await keepSingleLineItemRow(appFrame);
-  await appFrame.getByRole('button', { name: 'Find items' }).first().click();
+  const findItems = appFrame.getByRole('button', { name: 'Find items' }).first();
+  await expect(findItems).toBeVisible({ timeout: 15000 });
+  await findItems.click();
+  const search = appFrame.getByRole('textbox', { name: /Find items/i });
+  if (typeof productName === 'string' && (await search.isVisible({ timeout: 3000 }).catch(() => false))) {
+    await search.fill(productName);
+  }
   await expect(appFrame.getByRole('option').first()).toBeVisible({ timeout: 15000 });
   if (productName) {
     const named =
@@ -610,9 +645,17 @@ export async function selectProject(
   if (typeof name !== 'string') return;
 
   const dup = duplicateLocators(appFrame).title;
-  await expect(selectedProjectButton(appFrame, name).or(dup)).toBeVisible({
-    timeout: 15000,
-  });
+  const selected = selectedProjectButton(appFrame, name);
+  await expect
+    .poll(
+      async () => {
+        if (await dup.isVisible().catch(() => false)) return 'dup';
+        if (await selected.isVisible().catch(() => false)) return 'ok';
+        return '';
+      },
+      { timeout: 15000 }
+    )
+    .toMatch(/^(dup|ok)$/);
 }
 
 /**
@@ -669,17 +712,26 @@ export async function selectPartnerAndProject(
 
   const dup = duplicateLocators(appFrame).title;
   const noLast = appFrame.getByText(TOAST.noLastInvoice);
-  const outcomePromise = expect(dup.or(noLast))
-    .toBeVisible({ timeout: 12000 })
-    .then(async (): Promise<ProjectSelectOutcome> => {
-      if (await dup.isVisible().catch(() => false)) return 'duplicate';
-      if (await noLast.isVisible().catch(() => false)) return 'no-last-invoice';
-      return 'clear';
-    })
-    .catch((): ProjectSelectOutcome => 'clear');
-
+  const selected = selectedProjectButton(appFrame, fixture.projectName);
   await selectProject(appFrame, fixture.projectName);
-  return outcomePromise;
+  try {
+    await expect
+      .poll(
+        async () => {
+          if (await dup.isVisible().catch(() => false)) return 'duplicate';
+          if (await noLast.isVisible().catch(() => false)) return 'no-last-invoice';
+          if (await selected.isVisible().catch(() => false)) return 'clear';
+          return '';
+        },
+        { timeout: 15000 }
+      )
+      .toMatch(/^(duplicate|no-last-invoice|clear)$/);
+    if (await dup.isVisible().catch(() => false)) return 'duplicate';
+    if (await noLast.isVisible().catch(() => false)) return 'no-last-invoice';
+    return 'clear';
+  } catch {
+    return 'clear';
+  }
 }
 
 export async function awaitSubmitNavigatedToOverview(appFrame: FrameLocator): Promise<void> {

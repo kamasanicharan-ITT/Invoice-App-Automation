@@ -414,13 +414,18 @@
 - **Priority:** High | **Status:** Active | **Automation:** Locked
 - **Scenario Explanation:** Visibility only — do **not** click Delete Draft here (that is IO-034).
 
-## IO-033 — Delete Draft shows confirmation popup
+## IO-033 — Delete Draft removes the draft (no confirmation popup)
 - **Module:** Actions Menu
 - **User Role:** PM / BDU
-- **Live-locked:** **Superseded / not applicable.** Clicking **Delete Draft** **deletes immediately** — **no** confirmation popup.
-- **Automation:** Do **not** implement Excel’s confirm step. Keep a skipped stub labeled superseded, or replace with a negative assert “no confirm dialog” only if useful; preferred: drop from active suite and fold behavior into IO-034.
-- **Priority:** — | **Status:** Superseded by live app
-- **Scenario Explanation:** Excel expected a confirm gate; product does not.
+- **Live-locked:** Clicking **Delete Draft** deletes immediately — **no** confirmation popup.
+- **Steps:**
+  1. Ensure an Edit Draft row exists (seed a disposable Draft if needed)
+  2. ⋮ → **Delete Draft**
+  3. Do not wait for Continue / Yes / OK
+  4. Assert Edit Draft is gone from Overview
+- **Expected Result:** Draft row is deleted; no popup
+- **Priority:** High | **Status:** Active | **Automation:** Locked
+- **Scenario Explanation:** Excel expected a confirm gate; product deletes immediately. IO-033 asserts that delete. IO-034 is the same path with a row marker.
 
 ## IO-034 — Confirming Delete Draft removes the invoice
 - **Module:** Actions Menu
@@ -540,7 +545,7 @@
 - **Priority:** Medium | **Status:** Active
 - **Scenario Explanation:** Ties directly to the ongoing **Non-NA PDF quantity formatting** work (minimum 2 decimals, preserving 3–4 when intentionally entered). Automation here is at the gallery/overview level rather than the PDF, so it's a good complementary check — verify the same N2/N3/N4 formatting logic applies consistently in the gallery view, not just the generated PDF.
 - **Automated steps (16 Sep 2026):** Admin creates an **adhoc** invoice on a non-NA project (fixtures pick the active partner/project pair), adds five line items using Editable Rate products that carry **no default catalog rate**, Qty 1 each, rates `2 / 1.2 / 1.21 / 1.123 / 1.1234`. Submit, then find the row on Overview by **project name** (search by invoice number does not match) and wait out the disabled "Background Invoice Process Running" Next Step by refreshing the gallery. Open the row's Next Step to get **View Invoice**, read the PDF.js text layer, and compare each row's Rate against what was typed — anchored on the row description so a neighbouring row cannot satisfy the check. Close the overlay with `icn_closeViewInvoiceInvoiceOverview`; no Flag / Mark as Reviewed.
-- **Current result:** FAILS on rows 4 and 5 — PDF prints `AU$1.12` for both 1.123 and 1.1234. The Rate field and Dataverse keep 4 decimals, so the loss happens in the PDF/Total formatting.
+- **Current result:** PASS criteria updated 21 Sep 2026 — PDF Rate and Amount are **2 decimals** (`2`→`2.00`, `1.2`→`1.20`, `1.21`→`1.21`, `1.123`→`1.12`, `1.1234`→`1.12`). That is the intended product rule. The form may still keep 3–4 decimals in the Rate field; IO-041 only asserts the PDF.
 
 ## IO-042 — Alphabetical Order
 - **Module:** Alphabetical Order

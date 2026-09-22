@@ -8,8 +8,7 @@
 
 import { expect, request, type FrameLocator, type Locator, type Page } from '@playwright/test';
 import { DATAVERSE_URL, PRODUCT_TYPE } from './dataverse-fixtures';
-import { dismissHostDialogs } from './host-dialogs';
-import { clickIconRightOf, waitForOverviewSettled } from './invoice-overview-ui';
+import { resetOverviewViaDashboard, waitForOverviewSettled } from './invoice-overview-ui';
 
 const ODATA_HEADERS = (token: string) => ({
   Authorization: `Bearer ${token}`,
@@ -31,10 +30,9 @@ export const DECIMAL_DESCRIPTIONS = [
   'Decimal check row five',
 ] as const;
 
-/** Rate as the PDF/grid is expected to render it (minimum two decimals). */
+/** PDF / Amount: always two decimals (round half away from zero via toFixed). */
 export function expectedRateDisplay(rate: string): string {
-  const [whole, fraction = ''] = rate.split('.');
-  return `${whole}.${fraction.padEnd(2, '0')}`;
+  return Number(rate).toFixed(2);
 }
 
 /**
@@ -200,10 +198,9 @@ export async function fillDecimalRow(
 }
 
 /**
- * Right after Submit the row's Next Step is replaced by a disabled button
- * titled "Background Invoice Process Running", and the Canvas gallery keeps
- * that state until it re-queries — so refresh between checks instead of
- * waiting on the stale button.
+ * After a flow, Overview keeps the old gallery (Pending / blank Next Step)
+ * until the collection is re-queried. Search only filters that stale set —
+ * it does not load the new status. Leave Overview via Dashboard, then search.
  */
 export async function waitForRowNextStep(
   page: Page,
@@ -221,6 +218,11 @@ export async function waitForRowNextStep(
 
   let lastState = 'row not rendered';
   while (Date.now() < deadline) {
+    await resetOverviewViaDashboard(page, appFrame);
+    if ((await search.count()) > 0) {
+      await search.fill(opts.searchTerm);
+      await waitForOverviewSettled(appFrame).catch(() => undefined);
+    }
     if (await row().isVisible().catch(() => false)) {
       if ((await nextStep().count()) > 0) {
         if (await nextStep().isEnabled().catch(() => false)) return nextStep();
@@ -228,14 +230,9 @@ export async function waitForRowNextStep(
       } else {
         lastState = 'Background Invoice Process Running';
       }
+    } else {
+      lastState = 'row not rendered';
     }
-    await clickIconRightOf(page, appFrame.getByText('Invoice Overview', { exact: true }).first());
-    await dismissHostDialogs(page);
-    if ((await search.count()) > 0 && !(await search.inputValue().catch(() => ''))) {
-      await search.fill(opts.searchTerm);
-    }
-    await waitForOverviewSettled(appFrame).catch(() => undefined);
-    await page.waitForTimeout(6000);
   }
   throw new Error(
     `Invoice ${opts.invoiceNumber} never offered an enabled Next Step button (last state: ${lastState})`

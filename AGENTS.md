@@ -12,6 +12,7 @@ Invoice app to raise invoices for their projects.
 - `specs/` — Screen plans, Excel source sheets, setup/phase2 docs, Dataverse schema and flow names.
 - `tests/seed.spec.ts` — template used when generating a new test. Do not edit manually.
 - `playwright.config.ts` — headless off, role projects, `ENV`-aware storageState, retries 1.
+- `test-log-details/` — local run logs (`logs/`), probe screenshots (`screenshots/`), and probe notes (`notes/`). Never drop these in the repo root. Playwright report output stays in `test-results/`, `playwright-report/`, and `allure-results/`.
 
 ## Cursor configuration
 

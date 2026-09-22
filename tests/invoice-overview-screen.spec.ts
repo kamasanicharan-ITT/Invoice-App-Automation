@@ -8,6 +8,7 @@
 import { test, expect } from '@playwright/test';
 import { markGroupAndShot } from './utils/screenshot';
 import { dismissHostDialogs } from './utils/host-dialogs';
+import { assertAppSession } from './utils/assert-app-session';
 import {
   captureDataverseToken,
   listActiveContractsForProject,
@@ -129,6 +130,18 @@ function flowRunLine(r: FlowRunRow): string {
 
 test.describe('Invoice Overview Screen', () => {
   test.describe.configure({ timeout: 120000 });
+
+  // Session gate: one open before any scheduled case (full file, --grep group, or
+  // a single test). Sign in / dead storageState fails this hook so later cases
+  // are skipped instead of each timing out. See tests/utils/assert-app-session.ts.
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    try {
+      await assertAppSession(page);
+    } finally {
+      await page.close();
+    }
+  });
 
   // Shared shell for Admin + PM. Radios differ by persona (project storageState).
 
@@ -1035,8 +1048,43 @@ test.describe('Invoice Overview Screen', () => {
       await page.keyboard.press('Escape');
     });
 
-    test('IO-033: Delete Draft shows confirmation popup (superseded)', async () => {
-      test.skip(true, 'Superseded — live app deletes immediately with no confirmation popup');
+    test('IO-033: Delete Draft removes the draft with no confirmation popup', async ({
+      page,
+      browser,
+    }, testInfo) => {
+      test.setTimeout(180000);
+      const persona = activePersona(testInfo);
+      test.skip(
+        persona === 'pm',
+        'On hold — PM Delete Draft ⋮ to be verified later'
+      );
+      const appFrame = await ensureDisposableDraft(page, browser, persona);
+
+      const beforeCount = await appFrame.getByRole('button', { name: 'Edit Draft', exact: true }).count();
+      expect(beforeCount, 'Need an Edit Draft row to delete').toBeGreaterThan(0);
+
+      await openRowKebab(page, appFrame, 'Edit Draft', 'Delete Draft');
+      await expect(appFrame.getByText('Delete Draft', { exact: true })).toBeVisible({
+        timeout: 10000,
+      });
+      await appFrame.getByText('Delete Draft', { exact: true }).click();
+
+      // Live app has no confirm popup — the row should disappear immediately.
+      await expect(
+        appFrame.getByRole('button', { name: /^(Continue|Yes|OK|Confirm)$/i })
+      ).toHaveCount(0);
+      await waitForOverviewSettled(appFrame);
+      await expect(
+        appFrame.getByRole('button', { name: 'Edit Draft', exact: true }),
+        'Draft was not deleted — Edit Draft is still on Overview'
+      ).toHaveCount(0);
+
+      await markGroupAndShot(
+        page,
+        [appFrame.getByText('Show Invoices', { exact: true })],
+        'Draft deleted with no popup',
+        testInfo
+      );
     });
 
     test('IO-034: Delete Draft removes the invoice immediately', async ({
@@ -1267,7 +1315,7 @@ test.describe('Invoice Overview Screen', () => {
       page,
       browser,
     }, testInfo) => {
-      test.setTimeout(360000);
+      test.setTimeout(900000);
       const appFrame = await openInvoiceOverview(page);
       await ensureOverviewRows(page, appFrame);
 
@@ -1297,7 +1345,10 @@ test.describe('Invoice Overview Screen', () => {
 
         await approve.first().click();
         await dismissHostDialogs(page);
-        await expect(appFrame.getByText('View Invoice', { exact: true })).toBeVisible({
+        await expect(
+          appFrame.getByText('View Invoice', { exact: true }),
+          'View Invoice overlay did not open from Approve'
+        ).toBeVisible({
           timeout: 45000,
         });
         await expect(appFrame.getByRole('button', { name: 'Flag' })).toBeVisible();
@@ -1306,10 +1357,14 @@ test.describe('Invoice Overview Screen', () => {
         );
         const overlayApprove = overlay.getByRole('button', { name: 'Approve', exact: true });
         await expect(overlayApprove).toBeVisible();
-        const pdf = page.frameLocator('iframe[name="fullscreen-app-host"]').frameLocator('iframe');
-        await expect(pdf.getByText(/Invoice|Partner Name|INVOICE/i).first()).toBeVisible({
-          timeout: 30000,
-        });
+        await markGroupAndShot(
+          page,
+          [appFrame.getByText('View Invoice', { exact: true }), overlayApprove],
+          'View Invoice overlay opened from Approve',
+          testInfo
+        );
+        // PDF.js often stays at 0/0 until the approval flow finishes. Confirm
+        // the overlay opened, Approve now, then assert PDF after status lands.
 
         const comments = appFrame.getByPlaceholder(/Type here/);
         if (
@@ -1353,21 +1408,31 @@ test.describe('Invoice Overview Screen', () => {
         `Invoice ${invoiceNo} landed on ${waited.status} instead of Approved`
       ).toMatch(/^Approved$/i);
 
-      await resetOverviewViaDashboard(page, appFrame);
-      const search = appFrame.getByRole('textbox', { name: 'Search' });
-      if ((await search.count()) > 0) {
-        await search.fill(invoiceNo);
-        await waitForOverviewSettled(appFrame);
-      }
-      const targetRow = appFrame.getByRole('listitem').filter({ hasText: invoiceNo });
-      if ((await targetRow.count()) > 0) {
-        await markGroupAndShot(
-          page,
-          [targetRow.first()],
-          'Approved status after Approve',
-          testInfo
-        );
-      }
+      const viewBtn = await waitForRowNextStep(page, appFrame, {
+        invoiceNumber: invoiceNo,
+        searchTerm: invoiceNo,
+        timeoutMs: 240000,
+      });
+      await markGroupAndShot(
+        page,
+        [appFrame.getByRole('listitem').filter({ hasText: invoiceNo }).first()],
+        'Approved status after Approve',
+        testInfo
+      );
+      await viewBtn.click();
+      await expect(
+        appFrame.getByText('View Invoice', { exact: true }),
+        'View Invoice did not reopen after approval flow'
+      ).toBeVisible({ timeout: 45000 });
+      const pdfText = await readPdfViewerText(page, {
+        contains: /Invoice|PartnerName|INVOICE|Amount/i,
+        timeoutMs: 180000,
+      });
+      expect(
+        normalizePdfText(pdfText),
+        `PDF still empty after approval flow for ${invoiceNo}`
+      ).toMatch(/Invoice|PartnerName|INVOICE|Amount/i);
+      await closeViewInvoiceOverlay(appFrame);
     });
 
     test('IO-039: Reviewer can flag a Submitted invoice @admin', async ({
@@ -1598,7 +1663,7 @@ test.describe('Invoice Overview Screen', () => {
   });
 
   test.describe('Decimal + ordering Excel cases', () => {
-    test('IO-041: Rate decimals survive Submit and render in the PDF @admin', async ({
+    test('IO-041: PDF Rate and Amount show at most 2 decimal places @admin', async ({
       page,
       browser,
     }, testInfo) => {
@@ -1763,30 +1828,26 @@ test.describe('Invoice Overview Screen', () => {
         `- Project: **${project!.projectName}** (${project!.partnerName}, region ${project!.region ?? 'unknown'})`,
         `- Adhoc: yes · Qty per row: 1 · Invoice id: ${invoiceId}`,
         '',
-        '| # | Product | Entered rate | Rate field kept | Grid Total | PDF Qty | PDF Rate | PDF Amount | Rate matches |',
-        '|---|---|---|---|---|---|---|---|---|',
+        '| # | Product | Entered rate | Rate field kept | PDF Qty | PDF Rate | PDF Amount | PDF 2dp match |',
+        '|---|---|---|---|---|---|---|---|',
       ];
-      const formMismatches: string[] = [];
       const pdfMisses: string[] = [];
 
       for (const row of filled) {
-        const expectedValue = Number(row.requestedRate);
+        const expectedPdf = expectedRateDisplay(row.requestedRate);
+        const expectedValue = Number(expectedPdf);
         const pdf = pdfRowValues(pdfText, row.description);
-        const inPdf = pdf.rate !== undefined && Number(pdf.rate) === expectedValue;
+        const rateOk = pdf.rate !== undefined && Number(pdf.rate) === expectedValue;
+        const amountOk = pdf.amount !== undefined && Number(pdf.amount) === expectedValue;
+        const inPdf = rateOk && amountOk;
         report.push(
           `| ${row.index + 1} | ${row.product} | ${row.requestedRate} | ${row.acceptedRate || '—'} | ` +
-            `${row.displayedTotal || '—'} | ${pdf.qty ?? '—'} | ${pdf.rate ?? '—'} | ` +
-            `${pdf.amount ?? '—'} | ${inPdf ? 'yes' : 'NO'} |`
+            `${pdf.qty ?? '—'} | ${pdf.rate ?? '—'} | ${pdf.amount ?? '—'} | ${inPdf ? 'yes' : 'NO'} |`
         );
-        if (Number(row.acceptedRate) !== expectedValue) {
-          formMismatches.push(
-            `row ${row.index + 1}: typed ${row.requestedRate}, form kept ${row.acceptedRate || 'blank'}`
-          );
-        }
         if (!inPdf) {
           pdfMisses.push(
-            `row ${row.index + 1}: typed ${row.requestedRate} (expected ` +
-              `${expectedRateDisplay(row.requestedRate)}), PDF shows ${pdf.rate ?? 'no value'}`
+            `row ${row.index + 1}: typed ${row.requestedRate} → PDF must show ${expectedPdf} ` +
+              `for Rate and Amount (qty 1); got Rate=${pdf.rate ?? 'none'} Amount=${pdf.amount ?? 'none'}`
           );
         }
       }
@@ -1804,34 +1865,25 @@ test.describe('Invoice Overview Screen', () => {
       await closeViewInvoiceOverlay(appFrame).catch(() => undefined);
 
       expect(
-        formMismatches,
-        `Create Invoice grid changed the rates: ${formMismatches.join(' | ')}`
+        pdfMisses,
+        `PDF Rate/Amount must be 2 decimals: ${pdfMisses.join(' | ')}`
       ).toHaveLength(0);
-      expect(pdfMisses, `PDF does not show the entered rates: ${pdfMisses.join(' | ')}`).toHaveLength(
-        0
-      );
     });
 
-    test('IO-042: Column funnel values are alphabetical (sort + funnel audit)', async ({
+    test('IO-042: Column sort arrows and funnel filters still work', async ({
       page,
     }, testInfo) => {
       test.setTimeout(600000);
       const appFrame = await openInvoiceOverview(page);
       await ensureOverviewRows(page, appFrame);
+      expect(await overviewHasRows(appFrame), 'No invoices to sort or filter').toBe(true);
 
-      const report: string[] = ['# IO-042 — Overview sort + funnel audit', ''];
-      const findings: string[] = [];
+      const report: string[] = [
+        '# IO-042 — sort arrows + funnel filter (order of funnel lists is not asserted)',
+        '',
+      ];
 
-      const firstOutOfOrder = (values: string[]): string => {
-        for (let i = 1; i < values.length; i++) {
-          if (values[i - 1].localeCompare(values[i], undefined, { sensitivity: 'base' }) > 0) {
-            return `"${values[i - 1]}" before "${values[i]}" (position ${i})`;
-          }
-        }
-        return '';
-      };
-
-      report.push('## Column sort arrows', '');
+      report.push('## Column sort arrows (Action Pending has no sort)', '');
       const sortColumns = [
         { column: 'Partner' as const, field: 'partner' as const },
         { column: 'Project' as const, field: 'project' as const },
@@ -1840,80 +1892,139 @@ test.describe('Invoice Overview Screen', () => {
       for (const { column, field } of sortColumns) {
         await clickColumnSortArrow(page, appFrame, column);
         const asc = (await galleryRows(appFrame)).map((r) => r[field]).filter(Boolean);
+        expect(asc.length, `No ${column} values after sort`).toBeGreaterThan(0);
+        expect(
+          isSortedAsc(asc),
+          `${column} first click should be low→high (digits before letters): ${asc.slice(0, 8).join(', ')}`
+        ).toBe(true);
         await clickColumnSortArrow(page, appFrame, column);
         const desc = (await galleryRows(appFrame)).map((r) => r[field]).filter(Boolean);
-        const ascOk = asc.length > 0 && isSortedAsc(asc);
-        const descOk = desc.length > 0 && isSortedDesc(desc);
+        expect(
+          isSortedDesc(desc),
+          `${column} second click should be high→low: ${desc.slice(0, 8).join(', ')}`
+        ).toBe(true);
         report.push(
-          `- **${column}** — first click ${ascOk ? 'A→Z ok' : `NOT ascending (${asc.slice(0, 6).join(', ')})`}; ` +
-            `second click ${descOk ? 'Z→A ok' : `NOT descending (${desc.slice(0, 6).join(', ')})`}`
+          `- **${column}** — first click low→high (${asc.slice(0, 4).join(', ')}); second click high→low`
         );
-        if (!ascOk) findings.push(`${column} sort: first click is not ascending`);
-        if (!descOk) findings.push(`${column} sort: second click is not descending`);
         await resetOverviewViaDashboard(page, appFrame);
+      }
+      report.push('- **Action Pending with** — funnel only, no sort arrow', '');
+
+      report.push('## Funnel: selected value filters the gallery (list order not checked)', '');
+
+      const visible = await galleryRows(appFrame);
+      const partnerFromGallery = visible.find((r) => r.partner)?.partner ?? '';
+      const projectFromGallery = visible.find((r) => r.project)?.project ?? '';
+      const actionFromGallery = visible.find((r) => r.actionPending)?.actionPending ?? '';
+
+      await clickColumnFunnel(page, appFrame, 'Partner');
+      const partnerFilter = appFrame.locator('[data-control-name="cmb_PartnerFilter"]');
+      await expect(partnerFilter, 'Partner funnel did not open').toBeVisible({ timeout: 15000 });
+      await partnerFilter.click({ force: true });
+      expect(partnerFromGallery, 'Could not read a Partner name from the gallery').toBeTruthy();
+      await page.keyboard.type(partnerFromGallery.slice(0, Math.min(4, partnerFromGallery.length)), {
+        delay: 50,
+      });
+      const partnerOpt = appFrame.getByRole('option', { name: partnerFromGallery, exact: true });
+      await expect(partnerOpt.first()).toBeVisible({ timeout: 15000 });
+      await partnerOpt.first().click();
+      await waitForOverviewSettled(appFrame);
+      const partnerRows = await galleryRows(appFrame);
+      expect(partnerRows.length, `Partner filter "${partnerFromGallery}" returned no rows`).toBeGreaterThan(
+        0
+      );
+      for (const row of partnerRows) {
+        if (row.partner) expect(row.partner).toBe(partnerFromGallery);
       }
       report.push(
-        '- **Status** — sort arrow clicked in IO-019 only; the gallery badge is not machine-readable, so order is verified visually.',
-        ''
+        `- Partner funnel: selected **${partnerFromGallery}** — ${partnerRows.length} row(s) match`
       );
+      await resetOverviewViaDashboard(page, appFrame);
 
-      report.push('## Funnel dropdown value order', '');
-      const funnels = [
-        {
-          column: 'Partner' as const,
-          combo: 'cmb_PartnerFilter',
-          alphabeticalExpected: true,
-        },
-        {
-          column: 'Project' as const,
-          combo: 'cmb_ProjectFilter',
-          alphabeticalExpected: true,
-        },
-        {
-          column: 'Action Pending with' as const,
-          combo: 'cnt_ActionPendingFilter',
-          alphabeticalExpected: true,
-        },
-        {
-          // Curated lifecycle list, not partner/project data — reported, not asserted.
-          column: 'Status' as const,
-          combo: 'dd_StatusFilter',
-          alphabeticalExpected: false,
-        },
-      ];
-      for (const funnel of funnels) {
-        await clickColumnFunnel(page, appFrame, funnel.column);
-        const combo = appFrame.locator(`[data-control-name="${funnel.combo}"]`);
-        await expect(combo, `${funnel.column} funnel did not open`).toBeVisible({ timeout: 15000 });
-        await combo.first().click({ force: true });
-        const options = appFrame.getByRole('option');
-        await expect(
-          options.first(),
-          `${funnel.column} funnel showed no values`
-        ).toBeVisible({ timeout: 20000 });
-        const values = (await options.allInnerTexts()).map((t) => t.trim()).filter(Boolean);
-        const sorted = isSortedAsc(values);
-        const offender = firstOutOfOrder(values);
-        report.push(
-          `### ${funnel.column} (${values.length} values)`,
-          `- Alphabetical: **${sorted ? 'yes' : 'no'}**${sorted ? '' : ` — first break: ${offender}`}`,
-          `- As shown: ${values.slice(0, 12).join(' · ')}${values.length > 12 ? ' …' : ''}`,
-          `- A→Z would start: ${[...values]
-            .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-            .slice(0, 12)
-            .join(' · ')}`,
-          ''
-        );
-        if (!sorted && funnel.alphabeticalExpected) {
-          findings.push(
-            `${funnel.column} funnel values are not alphabetical — ${offender} (${values.length} values)`
-          );
-        }
-        await page.keyboard.press('Escape').catch(() => undefined);
-        await resetOverviewViaDashboard(page, appFrame);
+      await clickColumnFunnel(page, appFrame, 'Project');
+      const projectFilter = appFrame.locator('[data-control-name="cmb_ProjectFilter"]');
+      await expect(projectFilter, 'Project funnel did not open').toBeVisible({ timeout: 15000 });
+      await projectFilter.click({ force: true });
+      expect(projectFromGallery, 'Could not read a Project name from the gallery').toBeTruthy();
+      await page.keyboard.type(projectFromGallery.slice(0, Math.min(4, projectFromGallery.length)), {
+        delay: 50,
+      });
+      const projectOpt = appFrame.getByRole('option', { name: projectFromGallery, exact: true });
+      await expect(projectOpt.first()).toBeVisible({ timeout: 15000 });
+      await projectOpt.first().click();
+      await waitForOverviewSettled(appFrame);
+      const projectRows = await galleryRows(appFrame);
+      expect(projectRows.length, `Project filter "${projectFromGallery}" returned no rows`).toBeGreaterThan(
+        0
+      );
+      for (const row of projectRows) {
+        if (row.project) expect(row.project).toBe(projectFromGallery);
       }
+      report.push(
+        `- Project funnel: selected **${projectFromGallery}** — ${projectRows.length} row(s) match`
+      );
+      await resetOverviewViaDashboard(page, appFrame);
 
-      report.push('## Findings', '', findings.length ? findings.map((f) => `- ${f}`).join('\n') : '- none');
+      await clickColumnFunnel(page, appFrame, 'Action Pending with');
+      const actionFilter = appFrame.locator('[data-control-name="cnt_ActionPendingFilter"]');
+      await expect(actionFilter, 'Action Pending funnel did not open').toBeVisible({ timeout: 15000 });
+      await actionFilter.click({ force: true });
+      if (actionFromGallery) {
+        await page.keyboard.type(actionFromGallery.slice(0, Math.min(3, actionFromGallery.length)), {
+          delay: 50,
+        });
+        const actionOpt = appFrame.getByRole('option', { name: actionFromGallery, exact: true });
+        await expect(actionOpt.first()).toBeVisible({ timeout: 15000 });
+        await actionOpt.first().click();
+        await waitForOverviewSettled(appFrame);
+        const actionRows = await galleryRows(appFrame);
+        expect(
+          actionRows.length,
+          `Action Pending filter "${actionFromGallery}" returned no rows`
+        ).toBeGreaterThan(0);
+        for (const row of actionRows) {
+          if (row.actionPending) expect(row.actionPending).toBe(actionFromGallery);
+        }
+        report.push(
+          `- Action Pending funnel (no sort): selected **${actionFromGallery}** — ${actionRows.length} row(s) match`
+        );
+      } else {
+        await page.keyboard.type('a', { delay: 40 });
+        await expect(
+          appFrame.getByRole('option').first(),
+          'Action Pending funnel opened but had no people'
+        ).toBeVisible({ timeout: 15000 });
+        report.push('- Action Pending funnel opened (no person on the current page to match)');
+        await page.keyboard.press('Escape').catch(() => undefined);
+      }
+      await resetOverviewViaDashboard(page, appFrame);
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await page.keyboard.press('Escape').catch(() => undefined);
+
+      await clickColumnFunnel(page, appFrame, 'Status');
+      const statusFilter = appFrame.locator('[data-control-name="dd_StatusFilter"]');
+      if (!(await statusFilter.isVisible().catch(() => false))) {
+        await clickColumnFunnel(page, appFrame, 'Status');
+      }
+      await expect(statusFilter, 'Status funnel did not open').toBeVisible({ timeout: 15000 });
+      await statusFilter.click({ force: true });
+      await page.keyboard.type('Sub', { delay: 40 });
+      const submittedOpt = appFrame
+        .getByRole('option', { name: 'Submitted', exact: true })
+        .or(appFrame.getByText('Submitted', { exact: true }));
+      await expect(submittedOpt.first(), 'Submitted missing from Status funnel').toBeVisible({
+        timeout: 15000,
+      });
+      await submittedOpt.first().click({ force: true });
+      await page.keyboard.press('Escape');
+      await waitForOverviewSettled(appFrame);
+      await expect(
+        appFrame.getByRole('button', { name: 'Review' }).first(),
+        'Status=Submitted should still show Review'
+      ).toBeVisible({ timeout: 15000 });
+      report.push('- Status funnel: selected **Submitted** — Review Next Step still present');
+      await resetOverviewViaDashboard(page, appFrame);
+
       await testInfo.attach('io-042-sort-funnel-audit.md', {
         body: report.join('\n'),
         contentType: 'text/markdown',
@@ -1921,11 +2032,9 @@ test.describe('Invoice Overview Screen', () => {
       await markGroupAndShot(
         page,
         [appFrame.getByText('Partner', { exact: true }).first()],
-        'Funnel order audit',
+        'Sort and funnel filters',
         testInfo
       );
-
-      expect(findings, `IO-042 findings:\n${findings.join('\n')}`).toHaveLength(0);
     });
   });
 

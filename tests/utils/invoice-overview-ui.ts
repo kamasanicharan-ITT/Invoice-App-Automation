@@ -612,13 +612,17 @@ export async function ensureOverviewRows(
 
 export function isSortedAsc(values: string[]): boolean {
   const cleaned = values.filter(Boolean);
-  const sorted = [...cleaned].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const sorted = [...cleaned].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })
+  );
   return cleaned.every((v, i) => v === sorted[i]);
 }
 
 export function isSortedDesc(values: string[]): boolean {
   const cleaned = values.filter(Boolean);
-  const sorted = [...cleaned].sort((a, b) => b.localeCompare(a, undefined, { sensitivity: 'base' }));
+  const sorted = [...cleaned].sort((a, b) =>
+    b.localeCompare(a, undefined, { sensitivity: 'base', numeric: true })
+  );
   return cleaned.every((v, i) => v === sorted[i]);
 }
 

@@ -51,6 +51,30 @@ steps:
       mergeTestResults: true
       testRunTitle: 'Invoice E2E $(ENV)'
 
+  - script: |
+      set -e
+      if [ ! -d allure-results ] || [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
+        echo "No allure-results; skipping Allure generation"
+        mkdir -p allure-report
+        exit 0
+      fi
+      npx allure generate ./allure-results \
+        --config ./allurerc.json \
+        --output ./allure-report \
+        --name "Invoice E2E ${ENV}"
+    displayName: Generate single-file Allure report
+    condition: always()
+    env:
+      ENV: $(ENV)
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish Allure report
+    condition: always()
+    inputs:
+      targetPath: allure-report
+      artifact: allure-report
+      publishLocation: pipeline
+
   - task: PublishPipelineArtifact@1
     displayName: Publish HTML report
     condition: always()

@@ -36,6 +36,14 @@ capability to change test code.
 6. **Verify** — re-run after each fix. Fix one error at a time.
 7. **Iterate** — repeat until the test passes cleanly.
 
+## Run logs and screenshots
+
+Save redirected test output and probe screenshots under `test-log-details/`, never in the repo root:
+
+- logs → `test-log-details/logs/`
+- screenshots → `test-log-details/screenshots/`
+- notes → `test-log-details/notes/`
+
 ## Principles
 
 - Prefer robust, maintainable fixes over quick hacks; document what was broken and how you

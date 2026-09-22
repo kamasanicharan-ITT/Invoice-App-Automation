@@ -154,13 +154,37 @@ jobs:
 
       - script: |
           set -e
+          if [ ! -d allure-results ] || [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
+            echo "No allure-results; skipping Allure generation"
+            mkdir -p allure-report
+            exit 0
+          fi
+          npx allure generate ./allure-results \
+            --config ./allurerc.json \
+            --output ./allure-report \
+            --name "Invoice E2E ${ENV} ${SUITE}"
+        displayName: Generate single-file Allure report
+        condition: always()
+        env:
+          ENV: $(ENV)
+          SUITE: ${{ parameters.testSuite }}
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish Allure report
+        condition: always()
+        inputs:
+          targetPath: allure-report
+          artifact: allure-report
+          publishLocation: pipeline
+
+      - script: |
+          set -e
           {
             echo "# How to read this run"
             echo ""
             echo "- **Tests tab** (this run): pass/fail per case. Pipeline list = history of every run."
-            echo "- Do **not** click \`index.html\` in Artifacts — Azure downloads it alone, so screenshots/videos break."
-            echo "- Download the **whole** \`playwright-html-report\` zip, unzip, then locally:"
-            echo "  \`npx playwright show-report playwright-report\`"
+            echo "- **Allure:** Artifacts → \`allure-report\` → download \`index.html\` and open it in a browser. It is one file, so screenshots are inside it."
+            echo "- **Playwright HTML:** do **not** click \`index.html\` inside \`playwright-html-report\`. Download the whole zip, unzip, then locally: \`npx playwright show-report playwright-report\`."
             echo "- Failed traces: download \`playwright-test-results\`, open \`*.zip\` on https://trace.playwright.dev"
           } > "$(Build.SourcesDirectory)/ado-report-help.md"
           echo "##vso[task.uploadsummary]$(Build.SourcesDirectory)/ado-report-help.md"
