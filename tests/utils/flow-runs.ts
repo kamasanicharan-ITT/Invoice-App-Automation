@@ -136,30 +136,72 @@ function workflowIdOf(run: FlowRunRow): string {
   return (run.workflowid ?? run['_workflow_value'] ?? '').replace(/[{}]/g, '').toLowerCase();
 }
 
+const DV_GET_ATTEMPTS = 5;
+const DV_GET_TIMEOUT_MS = 30_000;
+const DV_RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+const DV_TRANSIENT_NET =
+  /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ECONNABORTED|socket hang up|network|timed?\s*out/i;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseJsonBody<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Dataverse GET with a hard per-call timeout and retries.
+ * Flow-family tracing walks many `workflows(id)` rows after Submit; a hung socket
+ * used to sit until the 10-minute test timeout (ECONNRESET) even though the invoice
+ * had already been created. Never throw — callers already branch on `ok`.
+ */
 export async function dvGet<T>(
   token: string,
   pathAndQuery: string,
   extraHeaders?: Record<string, string>
 ): Promise<{ ok: boolean; status: number; body: T | null; raw: string }> {
-  const api = await request.newContext();
-  try {
-    const url = pathAndQuery.startsWith('http')
-      ? pathAndQuery
-      : `${DATAVERSE_URL}/api/data/v9.2/${pathAndQuery}`;
-    const res = await api.get(url, {
-      headers: { ...ODATA_HEADERS(token), ...extraHeaders },
-    });
-    const raw = await res.text();
-    let body: T | null = null;
+  const url = pathAndQuery.startsWith('http')
+    ? pathAndQuery
+    : `${DATAVERSE_URL}/api/data/v9.2/${pathAndQuery}`;
+  let lastStatus = 0;
+  let lastRaw = '';
+
+  for (let attempt = 1; attempt <= DV_GET_ATTEMPTS; attempt++) {
+    const api = await request.newContext({ timeout: DV_GET_TIMEOUT_MS });
     try {
-      body = JSON.parse(raw) as T;
-    } catch {
-      body = null;
+      const res = await api.get(url, {
+        headers: { ...ODATA_HEADERS(token), ...extraHeaders },
+        timeout: DV_GET_TIMEOUT_MS,
+      });
+      const raw = await res.text();
+      lastStatus = res.status();
+      lastRaw = raw;
+      if (res.ok() || !DV_RETRY_STATUS.has(res.status()) || attempt === DV_GET_ATTEMPTS) {
+        return { ok: res.ok(), status: res.status(), body: parseJsonBody<T>(raw), raw };
+      }
+    } catch (err) {
+      lastStatus = 0;
+      lastRaw = err instanceof Error ? err.message : String(err);
+      const retryable = DV_TRANSIENT_NET.test(lastRaw);
+      if (!retryable || attempt === DV_GET_ATTEMPTS) {
+        return { ok: false, status: 0, body: null, raw: lastRaw.slice(0, 800) };
+      }
+    } finally {
+      await api.dispose();
     }
-    return { ok: res.ok(), status: res.status(), body, raw };
-  } finally {
-    await api.dispose();
+    const waitMs = Math.min(500 * 2 ** (attempt - 1), 8000);
+    console.log(
+      `Dataverse GET retry ${attempt}/${DV_GET_ATTEMPTS} after ${lastStatus || 'network'} — ${waitMs}ms (${url.slice(0, 120)})`
+    );
+    await sleep(waitMs);
   }
+
+  return { ok: false, status: lastStatus, body: null, raw: lastRaw.slice(0, 800) };
 }
 
 /**

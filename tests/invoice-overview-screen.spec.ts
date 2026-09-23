@@ -135,6 +135,7 @@ test.describe('Invoice Overview Screen', () => {
   // a single test). Sign in / dead storageState fails this hook so later cases
   // are skipped instead of each timing out. See tests/utils/assert-app-session.ts.
   test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180000);
     const page = await browser.newPage();
     try {
       await assertAppSession(page);

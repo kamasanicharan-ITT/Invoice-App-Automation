@@ -2,11 +2,10 @@ import { expect, type Page, type FrameLocator, type Locator, type TestInfo, type
 import { APP_URL } from '../../config/env';
 import { dismissHostDialogs, dismissHostDialogsSettling } from './host-dialogs';
 import {
-  dismissDuplicateDialog,
   fillValidLine,
   openCreateInvoice,
   partnerComboHasOptions,
-  selectPartnerAndProject,
+  selectClearBrandNewProject,
 } from './create-invoice-ui';
 import {
   captureDataverseToken,
@@ -659,43 +658,33 @@ export async function ensureDisposableDraft(
   const candidates = await listProjectsClearForDraftSeed(token, persona);
   expect(
     candidates.length,
-    `No ${persona} project with an Active covering contract and no invoice this cycle`
+    `Failed because no ${persona} project is available to seed a Draft without Duplicate Project!`
   ).toBeGreaterThan(0);
 
-  let lastDuplicate = '';
-  for (const project of candidates) {
-    appFrame = await openCreateInvoice(page, persona);
-    expect(
-      await partnerComboHasOptions(appFrame),
-      `No Partner options for ${persona} — check PM mail-list / Amisha projects`
-    ).toBe(true);
+  appFrame = await openCreateInvoice(page, persona);
+  expect(
+    await partnerComboHasOptions(appFrame),
+    `No Partner options for ${persona} — check PM mail-list / Amisha projects`
+  ).toBe(true);
 
-    await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-    const outcome = await selectPartnerAndProject(appFrame, project);
-    if (outcome === 'duplicate') {
-      lastDuplicate = project.projectName;
-      await dismissDuplicateDialog(appFrame);
-      continue;
-    }
-
-    await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
-    const save = appFrame.getByRole('button', { name: 'Save Draft' });
-    await expect(save).toBeEnabled({ timeout: 20000 });
-    await save.click();
-    await expect(appFrame.getByText('Invoice Overview', { exact: true }).first()).toBeVisible({
-      timeout: 30000,
-    });
-    await waitForOverviewSettled(appFrame);
-    await expect(
-      findEdit().first(),
-      'Save Draft did not produce an Edit Draft row on Overview'
-    ).toBeVisible({ timeout: 30000 });
-    return appFrame;
-  }
-
-  throw new Error(
-    lastDuplicate
-      ? `Every clear-contract project still showed Duplicate Project! (last: ${lastDuplicate})`
-      : 'Could not Save Draft on any project without an invoice this cycle'
+  await selectClearBrandNewProject(
+    appFrame,
+    candidates,
+    `Failed because no ${persona} project is available to seed a Draft without Duplicate Project!`,
+    token
   );
+
+  await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
+  const save = appFrame.getByRole('button', { name: 'Save Draft' });
+  await expect(save).toBeEnabled({ timeout: 20000 });
+  await save.click();
+  await expect(appFrame.getByText('Invoice Overview', { exact: true }).first()).toBeVisible({
+    timeout: 30000,
+  });
+  await waitForOverviewSettled(appFrame);
+  await expect(
+    findEdit().first(),
+    'Save Draft did not produce an Edit Draft row on Overview'
+  ).toBeVisible({ timeout: 30000 });
+  return appFrame;
 }

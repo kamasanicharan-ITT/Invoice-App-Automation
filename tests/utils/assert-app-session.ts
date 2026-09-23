@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { APP_URL, env } from '../../config/env';
-import { dismissHostDialogs } from './host-dialogs';
+import { dismissHostDialogs, dismissHostDialogsSettling } from './host-dialogs';
 
 /**
  * Thrown when the Invoice Canvas never becomes reachable because the saved
@@ -46,9 +46,11 @@ export async function assertAppSession(page: Page): Promise<void> {
     .or(appFrame.getByRole('button', { name: 'Invoice Overview' }))
     .or(appFrame.getByRole('button', { name: 'Create Invoice' }));
 
-  // Poll until ready or expired — do not wait the full timeout after Sign in.
+  // Fast-fail only when Microsoft Sign in is actually shown. Canvas cold start
+  // often takes >30s; openCreateInvoice waits 60s then reloads + 90s. A short
+  // poll here used to stamp a valid session as expired and skip the rest of the file.
   let outcome: 'pending' | 'ready' | 'expired' = 'pending';
-  try {
+  const waitUntilReady = async (timeout: number) => {
     await expect
       .poll(
         async () => {
@@ -63,21 +65,38 @@ export async function assertAppSession(page: Page): Promise<void> {
           }
           return false;
         },
-        { timeout: 30000, intervals: [250, 500, 1000, 2000] },
+        { timeout, intervals: [250, 500, 1000, 2000] }
       )
       .toBeTruthy();
+  };
+
+  try {
+    await waitUntilReady(60000);
   } catch (cause) {
     if (await hostShowsMicrosoftSignIn(page)) {
       throw failSession(
         page,
-        'Microsoft Sign in is shown — saved session is expired or invalid.',
+        'Microsoft Sign in is shown — saved session is expired or invalid.'
       );
     }
-    throw failSession(
-      page,
-      'Invoice app did not become accessible (no Canvas Dashboard/nav).',
-      cause,
-    );
+    await dismissHostDialogs(page);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await dismissHostDialogsSettling(page);
+    try {
+      await waitUntilReady(90000);
+    } catch (retryCause) {
+      if (await hostShowsMicrosoftSignIn(page)) {
+        throw failSession(
+          page,
+          'Microsoft Sign in is shown — saved session is expired or invalid.'
+        );
+      }
+      throw failSession(
+        page,
+        'Invoice app did not become accessible (no Canvas Dashboard/nav). Canvas may still be loading — this is not proof the session expired.',
+        retryCause ?? cause
+      );
+    }
   }
 
   if (outcome === 'expired') {

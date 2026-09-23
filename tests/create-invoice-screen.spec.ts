@@ -31,7 +31,9 @@ import {
   addDaysUs,
   calendarMonthUsDates,
   threeMonthCapUsDates,
-  fourthMonthStartUsDate,
+  monthsAheadLastDayUs,
+  usDateToYmd,
+  minUsDate,
   acceptContractIfPrompted,
   replaceComboSelectionWithJunk,
   formatUsDate,
@@ -56,10 +58,11 @@ import {
   awaitSubmitNavigatedToOverview,
   partnerComboHasOptions,
   fillValidLine,
-  anyProject,
   ensureLineItemRow,
   keepSingleLineItemRow,
   dismissDuplicateDialog,
+  selectClearBrandNewProject,
+  selectProjectForNoLastInvoiceToast,
   selectProject,
   selectContractIfPrompted,
   contractModalOpen,
@@ -76,8 +79,10 @@ test.describe('Create Invoice Screen', () => {
   let dataverseToken = '';
   let fixtures: CreateInvoiceFixtures = {
     eligibleNonAdhoc: null,
+    eligibleNonAdhocCandidates: [],
     duplicateNonAdhoc: null,
     noLastMonthInvoice: null,
+    noLastMonthInvoiceCandidates: [],
     withLastInvoice: null,
     withLastInvoiceCandidates: [],
     northAmerica: null,
@@ -86,6 +91,7 @@ test.describe('Create Invoice Screen', () => {
     noFourthMonthCoverage: null,
     multiActiveContract: null,
     coversFourthMonth: null,
+    coversPastThreeMonthCap: null,
     threeMonthCapNoDuplicate: null,
     threeMonthCapLookupNote: '',
     editableProduct: null,
@@ -97,6 +103,7 @@ test.describe('Create Invoice Screen', () => {
   // (and the Dataverse fixture beforeAll) are skipped instead of each timing out.
   // See tests/utils/assert-app-session.ts.
   test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180000);
     const page = await browser.newPage();
     try {
       await assertAppSession(page);
@@ -142,18 +149,54 @@ test.describe('Create Invoice Screen', () => {
   }
 
   function selectableProject() {
-    return anyProject(
+    return clearCandidates()[0] ?? null;
+  }
+
+  function clearCandidates(
+    ...extra: (ProjectFixture | null | undefined)[]
+  ): ProjectFixture[] {
+    return [
+      ...extra,
       fixtures.eligibleNonAdhoc,
-      fixtures.coversFourthMonth,
       fixtures.northAmerica,
+      fixtures.coversFourthMonth,
+      fixtures.noLastMonthInvoice,
       fixtures.nonNorthAmerica,
-      fixtures.withLastInvoice,
-      fixtures.multiActiveContract
+      ...fixtures.eligibleNonAdhocCandidates.slice(0, 4),
+    ].filter(
+      (p, i, arr): p is ProjectFixture =>
+        !!p && arr.findIndex((x) => x?.projectId === p.projectId) === i
     );
   }
 
-  function fourthMonthProject() {
-    return fixtures.coversFourthMonth;
+  function adhocFutureProject() {
+    return fixtures.coversPastThreeMonthCap ?? fixtures.coversFourthMonth;
+  }
+
+  async function futureDateCoveredByContract(
+    projectId: string,
+    monthsAhead: number
+  ): Promise<{ us: string; contractEndUs: string }> {
+    const want = monthsAheadLastDayUs(monthsAhead);
+    const cap = threeMonthCapUsDates();
+    const contracts = dataverseToken
+      ? await listActiveContractsForProject(dataverseToken, projectId)
+      : [];
+    const covering =
+      contracts.find((c) => c.coversInvoiceDate && (c.end?.slice(0, 10) ?? '') >= usDateToYmd(want)) ??
+      contracts.find((c) => c.coversInvoiceDate) ??
+      contracts[0];
+    expect(
+      covering?.end,
+      `Failed because the selected project has no Active contract covering a date ${monthsAhead} months ahead (past the 3-month non-adhoc cap ${cap.firstBlocked}).`
+    ).toBeTruthy();
+    const contractEndUs = addDaysUs(covering!.end!, 0);
+    const us = minUsDate(want, contractEndUs);
+    expect(
+      usDateToYmd(us) >= usDateToYmd(cap.firstBlocked),
+      `Failed because ${covering!.name || 'the covering contract'} ends ${contractEndUs}, which is not past the 3-month cap (${cap.firstBlocked}). Need an Active contract that continues after that date.`
+    ).toBe(true);
+    return { us, contractEndUs };
   }
 
   function requireThreeMonthCapProject(): ProjectFixture {
@@ -170,34 +213,17 @@ test.describe('Create Invoice Screen', () => {
     return fixtures.threeMonthCapNoDuplicate!;
   }
 
-  async function selectClearBrandNewProject(
+  async function pickClearProject(
     appFrame: FrameLocator,
-    candidates: (ProjectFixture | null | undefined)[],
-    why: string
+    why: string,
+    extra: (ProjectFixture | null | undefined)[] = []
   ): Promise<ProjectFixture> {
-    const list = candidates.filter(
-      (p, i, arr): p is ProjectFixture =>
-        !!p && arr.findIndex((x) => x?.projectName === p.projectName) === i
+    return selectClearBrandNewProject(
+      appFrame,
+      extra.length ? [...extra, fixtures.eligibleNonAdhoc] : clearCandidates(),
+      why,
+      dataverseToken || undefined
     );
-    expect(list.length, why).toBeGreaterThan(0);
-    await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-    await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
-    const tried: string[] = [];
-    for (const project of list) {
-      const label = `${project.partnerName} / ${project.projectName}`;
-      tried.push(label);
-      const outcome = await selectPartnerAndProject(appFrame, project);
-      if (outcome !== 'duplicate') {
-        await acceptContractIfPrompted(appFrame);
-        return project;
-      }
-      await dismissDuplicateDialog(appFrame);
-    }
-    expect(
-      null,
-      `${why} Every candidate hit Duplicate Project this cycle. Tried: ${tried.join('; ')}`
-    ).toBeTruthy();
-    return list[0];
   }
 
   async function openFilledThreeMonthCapForm(page: Page) {
@@ -454,19 +480,20 @@ test.describe('Create Invoice Screen', () => {
     test('CI-005 Adhoc ON allows Invoice Date past 3 months when contract covers it @admin', async ({
       page,
     }, testInfo) => {
-      test.skip(!fixtures.editableProduct, 'No editable product');
-      const project = fourthMonthProject();
-      test.skip(!project, 'No in-scope project whose contract covers the 4th month');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, 'admin');
-      const future = fourthMonthStartUsDate();
 
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
       await setAdhoc(appFrame, true);
-      const outcome = await selectPartnerAndProject(appFrame, project!);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on 4th-month fixture');
-      await acceptContractIfPrompted(appFrame);
+      const project = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test adhoc Invoice Date past 3 months without Duplicate Project!',
+        [adhocFutureProject()]
+      );
+      const { us: future } = await futureDateCoveredByContract(project.projectId, 6);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
-      await fillDateField(page, appFrame, 0, future);
+      // Invoice Date follows Service End — set Service End first so the future
+      // Invoice Date stays valid (sheet: 6 months ahead, or as far as the contract goes).
+      await fillDateField(page, appFrame, 2, future);
       await expect(dateBox(appFrame, 0)).toHaveValue(future);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 15000 });
       await expect(appFrame.getByRole('button', { name: 'Save Draft' })).toBeEnabled();
@@ -477,6 +504,7 @@ test.describe('Create Invoice Screen', () => {
           [
             appFrame.getByText('Adhoc Invoice', { exact: true }),
             dateBox(appFrame, 0),
+            dateBox(appFrame, 2),
             appFrame.getByRole('button', { name: 'Save Draft' }),
             appFrame.getByRole('button', { name: 'Submit' }),
           ],
@@ -487,15 +515,14 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('CI-059 Adhoc zero amount cannot be submitted @admin', async ({ page }, testInfo) => {
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(!eligible, 'No eligible project fixture');
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, 'admin');
 
-      // As Admin, turn Adhoc ON, fill partner/project, add a line with quantity 0.
       await setAdhoc(appFrame, true);
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      test.skip(outcome === 'duplicate', 'Eligible project showed Duplicate Project!');
+      await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test adhoc zero amount without Duplicate Project!'
+      );
       await selectProduct(appFrame, fixtures.editableProduct!.name);
       await fillLineItem(page, appFrame, { description: LINE_DESCRIPTION, qty: '0', rate: '100' });
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
@@ -619,15 +646,13 @@ test.describe('Create Invoice Screen', () => {
       page,
     }, testInfo) => {
       const persona = activePersona(testInfo);
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(!eligible, 'No eligible Active project+contract');
       const appFrame = await openCreateInvoice(page, persona);
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Select a partner and project that has exactly one active covering contract.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      expect(outcome).not.toBe('duplicate');
+      const eligible = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to prove an active contract applies without Duplicate Project!'
+      );
       await expect(appFrame.getByText(TOAST.noActiveContract)).toHaveCount(0);
 
       await test.step('Active contract project selected', async () => {
@@ -687,8 +712,12 @@ test.describe('Create Invoice Screen', () => {
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project!);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on multi-contract fixture');
+      await selectClearBrandNewProject(
+        appFrame,
+        [project],
+        'Failed because no 2+ Active-contract project is available without Duplicate Project!',
+        dataverseToken || undefined
+      );
       const findContract = appFrame.getByRole('button', { name: 'Find Contract' });
       test.skip(
         !(await findContract.isVisible({ timeout: 8000 }).catch(() => false)),
@@ -735,9 +764,12 @@ test.describe('Create Invoice Screen', () => {
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
       await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project!);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on multi-contract fixture');
-      await acceptContractIfPrompted(appFrame);
+      await selectClearBrandNewProject(
+        appFrame,
+        [project],
+        'Failed because no 2+ Active-contract project is available without Duplicate Project!',
+        dataverseToken || undefined
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 15000,
@@ -763,16 +795,9 @@ test.describe('Create Invoice Screen', () => {
       expect(fixtures.editableProduct, 'No Editable Rate product in Dataverse').toBeTruthy();
       const persona = activePersona(testInfo);
       const appFrame = await openCreateInvoice(page, persona);
-      const project = await selectClearBrandNewProject(
+      const project = await pickClearProject(
         appFrame,
-        [
-          fixtures.eligibleNonAdhoc,
-          fixtures.northAmerica,
-          fixtures.nonNorthAmerica,
-          fixtures.coversFourthMonth,
-          fixtures.noFourthMonthCoverage,
-        ],
-        'Failed because no project is free of Duplicate Project to test Invoice Date outside the contract.'
+        'Failed because no project is available to test Invoice Date outside the contract without Duplicate Project!'
       );
       const pastContract = await firstDayPastContract(project.projectId);
       expect(
@@ -805,16 +830,9 @@ test.describe('Create Invoice Screen', () => {
       expect(fixtures.editableProduct, 'No Editable Rate product in Dataverse').toBeTruthy();
       const persona = activePersona(testInfo);
       const appFrame = await openCreateInvoice(page, persona);
-      const project = await selectClearBrandNewProject(
+      const project = await pickClearProject(
         appFrame,
-        [
-          fixtures.eligibleNonAdhoc,
-          fixtures.northAmerica,
-          fixtures.nonNorthAmerica,
-          fixtures.coversFourthMonth,
-          fixtures.noFourthMonthCoverage,
-        ],
-        'Failed because no project is free of Duplicate Project to test Service End outside the contract.'
+        'Failed because no project is available to test Service End outside the contract without Duplicate Project!'
       );
       const pastContract = await firstDayPastContract(project.projectId);
       expect(
@@ -845,28 +863,49 @@ test.describe('Create Invoice Screen', () => {
       page,
     }, testInfo) => {
       const persona = activePersona(testInfo);
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(!eligible, 'No eligible project');
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, persona);
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
-      const dates = calendarMonthUsDates();
 
-      // Set Service End outside contract, then set it back inside.
-      const pastContract = await firstDayPastContract(eligible!.projectId);
-      test.skip(!pastContract, 'No contract end date available for the eligible project');
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on eligible fixture');
+      const eligible = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test contract dates restored without Duplicate Project!',
+        [fixtures.noFourthMonthCoverage]
+      );
+      const contracts = dataverseToken
+        ? await listActiveContractsForProject(dataverseToken, eligible.projectId)
+        : [];
+      await selectContractIfPrompted(appFrame, {
+        contracts,
+        label: eligible.projectName,
+      });
+      const covering = contracts.find((c) => c.coversInvoiceDate) ?? contracts[0];
+      const cap = threeMonthCapUsDates();
+      const pastContract = covering?.end
+        ? addDaysUs(covering.end, 1)
+        : await firstDayPastContract(eligible.projectId);
+      expect(
+        pastContract,
+        `Failed because ${eligible.partnerName} / ${eligible.projectName} has no contract end date to step one day past`
+      ).toBeTruthy();
+      expect(
+        usDateToYmd(pastContract!) < usDateToYmd(cap.firstBlocked),
+        `Failed because stepping one day past this contract lands on ${pastContract}, which is also the 3-month cap (${cap.firstBlocked}). Need a covering contract that ends before that cap so CI-013 shows the contract error, not the 3-month banner.`
+      ).toBe(true);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
+      const validEnd = await dateBox(appFrame, 2).inputValue();
+
       await fillDateField(page, appFrame, 2, pastContract!);
+      await expect(dateBox(appFrame, 2)).toHaveValue(pastContract!);
+      await expect(appFrame.getByText(TOAST.threeMonthLimit)).toHaveCount(0);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
-      await fillDateField(page, appFrame, 1, dates.start);
-      await fillDateField(page, appFrame, 2, dates.end);
-      await fillDateField(page, appFrame, 0, dates.end);
+
+      await fillDateField(page, appFrame, 2, validEnd);
+      await expect(dateBox(appFrame, 2)).toHaveValue(validEnd);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 20000,
       });
+      await expect(appFrame.getByRole('button', { name: 'Save Draft' })).toBeEnabled();
 
       await test.step('Contract dates restored Submit enabled', async () => {
         await markGroupAndShot(
@@ -1014,16 +1053,9 @@ test.describe('Create Invoice Screen', () => {
       const persona = activePersona(testInfo);
       const cap = threeMonthCapUsDates();
       const appFrame = await openCreateInvoice(page, persona);
-      await selectClearBrandNewProject(
+      await pickClearProject(
         appFrame,
-        [
-          fixtures.eligibleNonAdhoc,
-          fixtures.noFourthMonthCoverage,
-          fixtures.northAmerica,
-          fixtures.nonNorthAmerica,
-          fixtures.coversFourthMonth,
-        ],
-        'Failed because no project is free of Duplicate Project to test the 3-month Save Draft cap.'
+        'Failed because no project is available to test the 3-month Save Draft cap without Duplicate Project!'
       );
       if (persona === 'admin') await setAdhoc(appFrame, false);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
@@ -1170,16 +1202,14 @@ test.describe('Create Invoice Screen', () => {
     test('CI-024 Partner junk search after a valid form disables both buttons', async ({
       page,
     }, testInfo) => {
-      test.skip(!fixtures.editableProduct, 'No editable product');
-      const project = selectableProject();
-      test.skip(!project, 'No selectable in-scope project');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
-      await acceptContractIfPrompted(appFrame);
+      const project = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test Partner junk search without Duplicate Project!'
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 15000,
@@ -1210,17 +1240,15 @@ test.describe('Create Invoice Screen', () => {
     test('CI-025 Project junk search after a valid form disables both buttons', async ({
       page,
     }, testInfo) => {
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const productName = fixtures.editableProduct!.name;
-      const project = selectableProject();
-      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
-      await acceptContractIfPrompted(appFrame);
+      const project = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test Project junk search without Duplicate Project!'
+      );
       await fillValidLine(page, appFrame, productName);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 15000,
@@ -1253,17 +1281,15 @@ test.describe('Create Invoice Screen', () => {
     test('CI-026 Product junk search after a valid form disables both buttons', async ({
       page,
     }, testInfo) => {
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const productName = fixtures.editableProduct!.name;
-      const project = selectableProject();
-      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
-      await acceptContractIfPrompted(appFrame);
+      await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test Product junk search without Duplicate Project!'
+      );
       await fillValidLine(page, appFrame, productName);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 15000,
@@ -1451,17 +1477,15 @@ test.describe('Create Invoice Screen', () => {
     test('CI-035 CI-036 Empty or incomplete line item blocks submit', async ({
       page,
     }, testInfo) => {
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const persona = activePersona(testInfo);
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(!eligible, 'No eligible project');
       const appFrame = await openCreateInvoice(page, persona);
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Complete header, leave a blank extra row.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      test.skip(outcome === 'duplicate', 'Duplicate Project!');
+      await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test an incomplete line without Duplicate Project!'
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await appFrame.getByRole('button', { name: 'Add new item' }).click();
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeDisabled();
@@ -1499,13 +1523,11 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('CI-033 Discount line item shows a negative total', async ({ page }, testInfo) => {
-      const project = selectableProject();
-      test.skip(!project, 'No selectable in-scope project');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on selectable fixture');
-      await acceptContractIfPrompted(appFrame);
+      const project = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test a Discount line without Duplicate Project!'
+      );
       await selectProduct(appFrame, /^Discount$/);
       await fillLineItem(page, appFrame, { description: 'discount line', qty: '1', rate: '45' });
       await expect(appFrame.getByText(/\$\s*-45/).first()).toBeVisible({ timeout: 15000 });
@@ -1528,16 +1550,18 @@ test.describe('Create Invoice Screen', () => {
 
   test.describe('Tax North America', () => {
     test('CI-039 Tax is optional for NA invoices', async ({ page }, testInfo) => {
-      const na = fixtures.northAmerica;
-      test.skip(!na, 'No North America project fixture');
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Select an NA project, complete the form, leave tax blank.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, na!);
-      test.skip(outcome === 'duplicate', 'NA fixture blocked by Duplicate Project!');
+      const na = await selectClearBrandNewProject(
+        appFrame,
+        clearCandidates().filter((p) =>
+          (p.region ?? '').toLowerCase().includes('north america')
+        ),
+        'Failed because no North America project is available without Duplicate Project!',
+        dataverseToken || undefined
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       const findTax = appFrame.getByRole('button', { name: 'Find Tax' });
       await expect.soft(findTax).toBeVisible({ timeout: 15000 }).catch(() => undefined);
@@ -1548,7 +1572,7 @@ test.describe('Create Invoice Screen', () => {
       await test.step('NA tax optional Submit enabled', async () => {
         await markGroupAndShot(
           page,
-          [selectedProjectButton(appFrame, na!.projectName), appFrame.getByRole('button', { name: 'Submit' })],
+          [selectedProjectButton(appFrame, na.projectName), appFrame.getByRole('button', { name: 'Submit' })],
           'NA tax optional Submit enabled',
           testInfo
         );
@@ -1558,16 +1582,18 @@ test.describe('Create Invoice Screen', () => {
     test('CI-040 CI-041 Selecting tax shows Subtotal Sales Tax and Grand Total', async ({
       page,
     }, testInfo) => {
-      const na = fixtures.northAmerica;
-      test.skip(!na, 'No North America project fixture');
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // On an NA invoice, select a tax rate.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, na!);
-      test.skip(outcome === 'duplicate', 'NA fixture blocked by Duplicate Project!');
+      await selectClearBrandNewProject(
+        appFrame,
+        clearCandidates().filter((p) =>
+          (p.region ?? '').toLowerCase().includes('north america')
+        ),
+        'Failed because no North America project is available without Duplicate Project!',
+        dataverseToken || undefined
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       const findTax = appFrame.getByRole('button', { name: 'Find Tax' });
       test.skip(!(await findTax.isVisible().catch(() => false)), 'Find Tax not shown');
@@ -1593,21 +1619,33 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('CI-040b Tax control is absent for Non-NA projects', async ({ page }, testInfo) => {
-      const nonNa = fixtures.nonNorthAmerica;
-      test.skip(!nonNa, 'No Non-NA project fixture');
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Select a Non-NA project.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, nonNa!);
-      test.skip(outcome === 'duplicate', 'Non-NA fixture blocked by Duplicate Project!');
+      const nonNa = await selectClearBrandNewProject(
+        appFrame,
+        [
+          fixtures.nonNorthAmerica,
+          ...clearCandidates().filter(
+            (p) => !isNorthAmericaRegion(p.region) && !!(p.region ?? '').trim()
+          ),
+        ],
+        'Failed because no non-North-America project is available without Duplicate Project!',
+        dataverseToken || undefined
+      );
+      expect(
+        isNorthAmericaRegion(nonNa.region),
+        `Failed because ${nonNa.partnerName} / ${nonNa.projectName} is North America — CI-040b needs a non-NA project so Tax is hidden`
+      ).toBe(false);
       await expect(appFrame.getByRole('button', { name: 'Find Tax' })).toHaveCount(0);
 
       await test.step('Non-NA has no Find Tax', async () => {
         await markGroupAndShot(
           page,
-          [selectedProjectButton(appFrame, nonNa!.projectName), appFrame.getByRole('button', { name: 'Submit' })],
+          [
+            selectedProjectButton(appFrame, nonNa.projectName),
+            appFrame.getByRole('button', { name: 'Submit' }),
+          ],
           'Non-NA has no Find Tax',
           testInfo
         );
@@ -1654,16 +1692,14 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('CI-049 Submit enables when all validations pass', async ({ page }, testInfo) => {
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(!eligible, 'No eligible project');
-      test.skip(!fixtures.editableProduct, 'No editable product');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Button-enable only — no Submit click, so Create/Update region flows are not expected.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      test.skip(outcome === 'duplicate', 'Eligible project showed Duplicate Project!');
+      const eligible = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to enable Submit without Duplicate Project!'
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
         timeout: 20000,
@@ -1686,17 +1722,15 @@ test.describe('Create Invoice Screen', () => {
     test('CI-050 Save Draft saves as Draft and returns to Overview', async ({
       page,
     }, testInfo) => {
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(!eligible, 'No eligible project');
-      test.skip(!fixtures.editableProduct, 'No editable product');
-      test.skip(!dataverseToken, 'No Dataverse token');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
+      expect(dataverseToken, 'No Dataverse token').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       test.skip(!(await partnerComboHasOptions(appFrame)), 'No Partner options for this persona');
 
-      // Fill required fields, click Save Draft. Product rule: Draft write, no Create/Update flow.
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      test.skip(outcome === 'duplicate', 'Eligible project showed Duplicate Project!');
+      const eligible = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to Save Draft without Duplicate Project!'
+      );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(appFrame.getByRole('button', { name: 'Save Draft' })).toBeEnabled({
         timeout: 20000,
@@ -1732,30 +1766,33 @@ test.describe('Create Invoice Screen', () => {
     test('CI-051 Adhoc Save Draft allows future dates inside contract @admin', async ({
       page,
     }, testInfo) => {
-      test.skip(!fixtures.editableProduct, 'No editable product');
-      const project = fourthMonthProject();
-      test.skip(!project, 'No in-scope project whose contract covers the 4th month');
+      expect(fixtures.editableProduct, 'No editable product').toBeTruthy();
+      expect(dataverseToken, 'No Dataverse token').toBeTruthy();
       const appFrame = await openCreateInvoice(page, 'admin');
-      const future = fourthMonthStartUsDate();
 
-      // Adhoc ON: 4th-month Invoice Date still covered by contract → Save Draft stays on.
       await setAdhoc(appFrame, true);
-      const outcome = await selectPartnerAndProject(appFrame, project);
-      test.skip(outcome === 'duplicate', 'Duplicate Project! on 4th-month fixture');
-      await acceptContractIfPrompted(appFrame);
+      const project = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test adhoc Save Draft past 3 months without Duplicate Project!',
+        [adhocFutureProject()]
+      );
+      const { us: future } = await futureDateCoveredByContract(project.projectId, 4);
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
-      await fillDateField(page, appFrame, 0, future);
-      await expect(dateBox(appFrame, 0)).toHaveValue(future);
-      await expect(appFrame.getByRole('button', { name: 'Save Draft' })).toBeEnabled();
-      await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled();
+      await fillDateField(page, appFrame, 2, future);
+      await expect(dateBox(appFrame, 2)).toHaveValue(future);
+      const saveDraft = appFrame.getByRole('button', { name: 'Save Draft' });
+      await expect(saveDraft).toBeEnabled({ timeout: 15000 });
+      await saveDraft.click();
+      await expect(appFrame.getByText('Invoice Overview', { exact: true }).first()).toBeVisible({
+        timeout: 30000,
+      });
 
       await test.step('Adhoc Save Draft enabled past 3-month cap', async () => {
         await markGroupAndShot(
           page,
           [
-            appFrame.getByText('Adhoc Invoice', { exact: true }),
-            dateBox(appFrame, 0),
-            appFrame.getByRole('button', { name: 'Save Draft' }),
+            appFrame.getByText('Invoice Overview', { exact: true }).first(),
+            appFrame.getByText(/Draft/i).first(),
           ],
           'Adhoc Save Draft enabled past 3-month cap',
           testInfo
@@ -1804,16 +1841,9 @@ test.describe('Create Invoice Screen', () => {
       expect(dataverseToken, 'No Dataverse token').toBeTruthy();
       const persona = activePersona(testInfo);
       const appFrame = await openCreateInvoice(page, persona);
-      const eligible = await selectClearBrandNewProject(
+      const eligible = await pickClearProject(
         appFrame,
-        [
-          fixtures.eligibleNonAdhoc,
-          fixtures.northAmerica,
-          fixtures.nonNorthAmerica,
-          fixtures.coversFourthMonth,
-          fixtures.noLastMonthInvoice,
-        ],
-        'Failed because no project is free of Duplicate Project to Submit and see on Overview.'
+        'Failed because no project is available to Submit and see on Overview without Duplicate Project!'
       );
       await fillValidLine(page, appFrame, fixtures.editableProduct!.name);
       await expect(appFrame.getByRole('button', { name: 'Submit' })).toBeEnabled({
@@ -2064,15 +2094,24 @@ test.describe('Create Invoice Screen', () => {
     test('TC-CI-13: Start with last invoice — no previous invoice toast', async ({
       page,
     }, testInfo) => {
-      const project = fixtures.noLastMonthInvoice;
-      test.skip(!project, 'No Active project without last-month invoices in Dataverse');
+      const candidates = [
+        fixtures.noLastMonthInvoice,
+        ...fixtures.noLastMonthInvoiceCandidates,
+      ];
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await appFrame.getByRole('radio', { name: 'Start with last invoice' }).click();
-      const outcome = await selectPartnerAndProject(appFrame, project!);
-      test.skip(outcome === 'duplicate', 'Fixture unexpectedly hit Duplicate Project!');
-      test.skip(outcome !== 'no-last-invoice', 'Fixture did not produce the no-previous-invoice toast');
-      await expect(appFrame.getByText(TOAST.noLastInvoice)).toBeVisible({ timeout: 5000 });
-      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+      const used = await selectProjectForNoLastInvoiceToast(
+        appFrame,
+        candidates,
+        dataverseToken || undefined
+      );
+      testInfo.annotations.push({
+        type: 'observed',
+        description: `no-last-invoice toast on ${used.partnerName} / ${used.projectName}`,
+      });
+      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked({
+        timeout: 10000,
+      });
     });
 
     test('TC-CI-20: Partner dropdown opens with options', async ({ page }, testInfo) => {
@@ -2093,44 +2132,15 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('TC-CI-32: Non-Editable Rate product locks the Rate field', async ({ page }, testInfo) => {
-      const product = fixtures.nonEditableProduct;
-      test.skip(!product, 'No Non-Editable Rate product in Dataverse');
-      const persona = activePersona(testInfo);
-      const candidates = (
-        persona === 'admin'
-          ? [fixtures.eligibleNonAdhoc, fixtures.noLastMonthInvoice, fixtures.northAmerica]
-          : [fixtures.noLastMonthInvoice, fixtures.eligibleNonAdhoc, fixtures.northAmerica]
-      ).filter(
-        (p, i, arr): p is ProjectFixture =>
-          !!p && arr.findIndex((x) => x?.projectName === p.projectName) === i
-      );
-      test.skip(candidates.length === 0, 'No Active project fixture from Dataverse');
-
-      const appFrame = await openCreateInvoice(page, persona);
-      if (persona === 'admin') {
-        await setAdhoc(appFrame, true);
-      }
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
-
-      let used: ProjectFixture | null = null;
-      for (const candidate of candidates) {
-        const outcome = await selectPartnerAndProject(appFrame, candidate);
-        const stuck = await selectedProjectButton(appFrame, candidate.projectName)
-          .isVisible()
-          .catch(() => false);
-        if (outcome !== 'duplicate' && stuck) {
-          used = candidate;
-          break;
-        }
-        await dismissDuplicateDialog(appFrame);
-      }
-      test.skip(
-        !used,
-        'No project without Duplicate Project this cycle — none is clear of a previous-month / this-period invoice'
+      expect(fixtures.nonEditableProduct, 'No Non-Editable Rate product in Dataverse').toBeTruthy();
+      const product = fixtures.nonEditableProduct!;
+      const appFrame = await openCreateInvoice(page, activePersona(testInfo));
+      await pickClearProject(
+        appFrame,
+        'Failed because no project is available to test a locked Rate without Duplicate Project!'
       );
 
-      await selectProduct(appFrame, product!.name);
+      await selectProduct(appFrame, product.name);
       await appFrame.getByPlaceholder('Enter description').first().fill(LINE_DESCRIPTION);
       const rate = appFrame.getByPlaceholder('0.00', { exact: true }).first();
       await expect(rate).toBeDisabled();
@@ -2155,36 +2165,22 @@ test.describe('Create Invoice Screen', () => {
     test('TC-CI-42: Create and Submit adhoc NA invoice with tax selected @admin', async ({
       page,
     }, testInfo) => {
-      test.skip(!dataverseToken, 'No Dataverse token');
-      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      expect(dataverseToken, 'No Dataverse token').toBeTruthy();
+      expect(fixtures.editableProduct, 'No Editable Rate product in Dataverse').toBeTruthy();
       const uniqueNa = [
-        isNorthAmericaRegion(fixtures.noLastMonthInvoice?.region)
-          ? fixtures.noLastMonthInvoice
-          : null,
-        isNorthAmericaRegion(fixtures.eligibleNonAdhoc?.region) ? fixtures.eligibleNonAdhoc : null,
+        ...clearCandidates().filter((p) =>
+          (p.region ?? '').toLowerCase().includes('north america')
+        ),
         fixtures.northAmerica,
-      ]
-        .filter((p): p is ProjectFixture => !!p)
-        .filter((p, i, arr) => arr.findIndex((x) => x.projectName === p.projectName) === i);
-      test.skip(uniqueNa.length === 0, 'No North America project fixture from Dataverse');
-
+      ];
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await setAdhoc(appFrame, true);
-      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
-
-      let usedNa: ProjectFixture | null = null;
-      for (const candidate of uniqueNa) {
-        const outcome = await selectPartnerAndProject(appFrame, candidate);
-        const stuck = await selectedProjectButton(appFrame, candidate.projectName)
-          .isVisible()
-          .catch(() => false);
-        if (outcome !== 'duplicate' && stuck) {
-          usedNa = candidate;
-          break;
-        }
-        await dismissDuplicateDialog(appFrame);
-      }
-      test.skip(!usedNa, 'All NA candidates hit Duplicate or failed to stick under Adhoc');
+      const usedNa = await selectClearBrandNewProject(
+        appFrame,
+        uniqueNa,
+        'Failed because no North America project is available to Submit an adhoc invoice without Duplicate Project!',
+        dataverseToken
+      );
 
       await selectProduct(appFrame, fixtures.editableProduct!.name);
       await fillLineItem(page, appFrame, {
@@ -2213,18 +2209,14 @@ test.describe('Create Invoice Screen', () => {
     test('TC-CI-50: Create and Submit non-adhoc invoice for eligible project', async ({
       page,
     }, testInfo) => {
-      test.skip(!dataverseToken, 'No Dataverse token');
-      const eligible = fixtures.eligibleNonAdhoc;
-      test.skip(
-        !eligible,
-        'No eligible Active project+contract without non-adhoc invoice in duplicate window'
-      );
-      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      expect(dataverseToken, 'No Dataverse token').toBeTruthy();
+      expect(fixtures.editableProduct, 'No Editable Rate product in Dataverse').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
-      await appFrame.getByRole('radio', { name: 'Brand New' }).click();
-      await setAdhoc(appFrame, false);
-      const outcome = await selectPartnerAndProject(appFrame, eligible!);
-      expect(outcome, 'Eligible fixture must not show Duplicate Project!').not.toBe('duplicate');
+      if (activePersona(testInfo) === 'admin') await setAdhoc(appFrame, false);
+      const eligible = await pickClearProject(
+        appFrame,
+        'Failed because no project is available to Submit a non-adhoc invoice without Duplicate Project!'
+      );
       await selectProduct(appFrame, fixtures.editableProduct!.name);
       await fillLineItem(page, appFrame, {
         description: LINE_DESCRIPTION,
@@ -2247,27 +2239,14 @@ test.describe('Create Invoice Screen', () => {
     });
 
     test('TC-CI-60: Create and Submit adhoc invoice @admin', async ({ page }, testInfo) => {
-      test.skip(!dataverseToken, 'No Dataverse token');
-      const candidates = [
-        fixtures.eligibleNonAdhoc,
-        fixtures.noLastMonthInvoice,
-        fixtures.nonNorthAmerica,
-        fixtures.northAmerica,
-      ].filter((p): p is ProjectFixture => !!p);
-      test.skip(candidates.length === 0, 'No Active project fixture from Dataverse');
-      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
+      expect(dataverseToken, 'No Dataverse token').toBeTruthy();
+      expect(fixtures.editableProduct, 'No Editable Rate product in Dataverse').toBeTruthy();
       const appFrame = await openCreateInvoice(page, activePersona(testInfo));
       await setAdhoc(appFrame, true);
-      let project: ProjectFixture | null = null;
-      for (const candidate of candidates) {
-        const outcome = await selectPartnerAndProject(appFrame, candidate);
-        if (outcome !== 'duplicate') {
-          project = candidate;
-          break;
-        }
-        await dismissDuplicateDialog(appFrame);
-      }
-      test.skip(!project, 'All adhoc candidates hit Duplicate Project!');
+      await pickClearProject(
+        appFrame,
+        'Failed because no project is available to Submit an adhoc invoice without Duplicate Project!'
+      );
       await selectProduct(appFrame, fixtures.editableProduct!.name);
       await fillLineItem(page, appFrame, {
         description: LINE_DESCRIPTION,
@@ -2301,9 +2280,12 @@ test.describe('Create Invoice Screen', () => {
         candidates: ProjectFixture[];
       }
     ): Promise<void> {
-      test.skip(!dataverseToken, 'No Dataverse token');
-      test.skip(!fixtures.editableProduct, 'No Editable Rate product in Dataverse');
-      test.skip(opts.candidates.length === 0, `No ${opts.label} project fixture in this Dataverse`);
+      expect(dataverseToken, 'No Dataverse token').toBeTruthy();
+      expect(fixtures.editableProduct, 'No Editable Rate product in Dataverse').toBeTruthy();
+      expect(
+        opts.candidates.length,
+        `Failed because no ${opts.label} project is available without Duplicate Project!`
+      ).toBeGreaterThan(0);
 
       const contractsByProject = new Map<string, ContractOption[]>();
       for (const candidate of opts.candidates) {
@@ -2312,32 +2294,28 @@ test.describe('Create Invoice Screen', () => {
           await listActiveContractsForProject(dataverseToken, candidate.projectId)
         );
       }
+      const preferred = opts.candidates.filter((candidate) => {
+        const list = contractsByProject.get(candidate.projectId) ?? [];
+        return list.filter((c) => c.coversInvoiceDate).length <= 1;
+      });
+      const pickFrom = preferred.length ? preferred : opts.candidates;
 
       const session = beginFlowCapture(page, dataverseToken);
       const appFrame = await openCreateInvoice(page, 'admin');
       await setAdhoc(appFrame, true);
-      await expect(appFrame.getByRole('radio', { name: 'Brand New' })).toBeChecked();
+      const project = await selectClearBrandNewProject(
+        appFrame,
+        pickFrom,
+        `Failed because no ${opts.label} project is available without Duplicate Project!`,
+        dataverseToken
+      );
+      let contractName: string | null = await selectContractIfPrompted(appFrame, {
+        contracts: contractsByProject.get(project.projectId),
+        label: project.projectName,
+      });
+      expect(isNorthAmericaRegion(project.region)).toBe(opts.regionKind === 'north-america');
 
-      let project: ProjectFixture | null = null;
-      let contractName: string | null = null;
-      for (const candidate of opts.candidates) {
-        const outcome = await selectPartnerAndProject(appFrame, candidate);
-        contractName = await selectContractIfPrompted(appFrame, {
-          contracts: contractsByProject.get(candidate.projectId),
-          label: candidate.projectName,
-        });
-        const stuck = await selectedProjectButton(appFrame, candidate.projectName)
-          .isVisible()
-          .catch(() => false);
-        if (outcome !== 'duplicate' && stuck) {
-          project = candidate;
-          break;
-        }
-        await dismissDuplicateDialog(appFrame);
-      }
-      test.skip(!project, `All ${opts.label} candidates hit Duplicate Project! or failed to stick`);
-      expect(isNorthAmericaRegion(project!.region)).toBe(opts.regionKind === 'north-america');
-
+      await setAdhoc(appFrame, true);
       if (await contractModalOpen(appFrame)) {
         contractName =
           (await selectContractIfPrompted(appFrame, {
@@ -2347,6 +2325,7 @@ test.describe('Create Invoice Screen', () => {
       }
       void contractName;
 
+      await setAdhoc(appFrame, true);
       await selectProduct(appFrame, fixtures.editableProduct!.name);
       await fillLineItem(page, appFrame, {
         description: LINE_DESCRIPTION,
@@ -2403,10 +2382,11 @@ test.describe('Create Invoice Screen', () => {
         flowLabel: 'Create Invoice - NA Region',
         flowNamePattern: /create\s*invoice.*(na|north\s*america)/i,
         candidates: dedupeByProject([
+          isNorthAmericaRegion(fixtures.eligibleNonAdhoc?.region) ? fixtures.eligibleNonAdhoc : null,
+          ...fixtures.eligibleNonAdhocCandidates.filter((p) => isNorthAmericaRegion(p.region)),
           isNorthAmericaRegion(fixtures.noLastMonthInvoice?.region)
             ? fixtures.noLastMonthInvoice
             : null,
-          isNorthAmericaRegion(fixtures.eligibleNonAdhoc?.region) ? fixtures.eligibleNonAdhoc : null,
           fixtures.northAmerica,
         ]),
       });

@@ -33,11 +33,18 @@ export type ProductFixture = {
 export type CreateInvoicePersona = 'admin' | 'pm';
 
 export type CreateInvoiceFixtures = {
-  /** Active project+1 contract with no non-adhoc invoice in the duplicate window. */
+  /**
+   * Active project+1 contract with no non-adhoc invoice in the duplicate window.
+   * First of `eligibleNonAdhocCandidates` — do not treat this single row as the only option.
+   */
   eligibleNonAdhoc: ProjectFixture | null;
+  /** All 1-contract projects that were clear of Duplicate Project! at fixture load. */
+  eligibleNonAdhocCandidates: ProjectFixture[];
   /** Active project that already has a non-adhoc invoice in the duplicate window. */
   duplicateNonAdhoc: ProjectFixture | null;
   noLastMonthInvoice: ProjectFixture | null;
+  /** Extra never-invoiced projects — TC-CI-13 toast + auto-switch to Brand New. */
+  noLastMonthInvoiceCandidates: ProjectFixture[];
   /** Selectable project whose previous invoice has line items — source for "Start with last invoice". */
   withLastInvoice: ProjectFixture | null;
   /** Extra last-month + line-item projects when the first prefill source does not copy in Canvas. */
@@ -54,10 +61,15 @@ export type CreateInvoiceFixtures = {
   /** Project with 2+ Active contracts covering the default invoice date (CI-014). */
   multiActiveContract: ProjectFixture | null;
   /**
-   * Covering contract still active on the 4th-month start (CI-005 / 011 / 012 / 051).
+   * Covering contract still active on the 4th-month start (CI-011 / 012).
    * Discovered from Dataverse, never a named seed.
    */
   coversFourthMonth: ProjectFixture | null;
+  /**
+   * Single Active contract that already covers today and extends past the 3-month
+   * non-adhoc cap (CI-005 / CI-051 Adhoc future dates).
+   */
+  coversPastThreeMonthCap: ProjectFixture | null;
   /**
    * PM 3-month cap (CI-006 / 020 / 021): Active contract covers mid-current-month
    * through the first blocked day, and no non-adhoc invoice in the duplicate window.
@@ -734,6 +746,58 @@ async function projectHasInvoiceInWindow(
   return existing.length > 0;
 }
 
+/** True when the project has any invoice row (any date/status). Brand New auto-switch only when this is false. */
+export async function projectHasAnyInvoice(token: string, projectId: string): Promise<boolean> {
+  const api = await request.newContext();
+  try {
+    const res = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_invoicedetailses?$filter=${encodeURIComponent(`_dia_projectid_value eq ${projectId}`)}` +
+        `&$top=1&$select=dia_invoicedetailsid`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!res.ok()) return true;
+    return ((await res.json()).value ?? []).length > 0;
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** True when Canvas will show Duplicate Project! for a non-adhoc Brand New select. */
+export async function projectBlockedByDuplicate(
+  token: string,
+  projectId: string
+): Promise<boolean> {
+  // Billing 6th→5th ∪ calendar 1st→last. Live popup still fires for Cancelled
+  // non-adhoc rows in that window (Unimind / Test for dev: only 9/30/2026 Cancelled,
+  // Duplicate Project! still opens). Do not drop Cancelled.
+  const window = getDuplicateCheckWindow();
+  if (
+    await projectHasInvoiceInWindow(token, projectId, window.start, window.end, {
+      nonAdhocOnly: true,
+    })
+  ) {
+    return true;
+  }
+  // Undated non-adhoc invoices also block Brand New, including older Drafts.
+  const parts = [
+    `_dia_projectid_value eq ${projectId}`,
+    'dia_invoicedate eq null',
+    '(dia_adhocinvoice eq false or dia_adhocinvoice eq null)',
+  ];
+  const api = await request.newContext();
+  try {
+    const res = await api.get(
+      `${DATAVERSE_URL}/api/data/v9.2/dia_invoicedetailses?$filter=${encodeURIComponent(parts.join(' and '))}` +
+        `&$top=1&$select=dia_invoicedetailsid`,
+      { headers: ODATA_HEADERS(token) }
+    );
+    if (!res.ok()) return true;
+    return ((await res.json()).value ?? []).length > 0;
+  } finally {
+    await api.dispose();
+  }
+}
+
 async function toProjectFixture(
   token: string,
   projectId: string,
@@ -767,7 +831,6 @@ export async function listProjectsClearForDraftSeed(
 ): Promise<ProjectFixture[]> {
   const allowedProjectIds = await resolvePersonaProjectIds(token, persona);
   const { end: invoiceDateIso } = getBillingCycleDates();
-  const dupWindow = getDuplicateCheckWindow();
   const invoiceDate = invoiceDateIso.slice(0, 10);
   const contracts = await fetchActiveContractsCoveringDate(token, invoiceDate, allowedProjectIds);
   const byProject = groupContractsByProject(contracts);
@@ -776,13 +839,7 @@ export async function listProjectsClearForDraftSeed(
   for (const [projectId, list] of byProject) {
     if (allowedProjectIds && !allowedProjectIds.has(normGuid(projectId))) continue;
     if (list.length < 1) continue;
-    if (
-      await projectHasInvoiceInWindow(token, projectId, dupWindow.start, dupWindow.end, {
-        excludeCancelled: true,
-      })
-    ) {
-      continue;
-    }
+    if (await projectBlockedByDuplicate(token, projectId)) continue;
     const fixture = await toProjectFixture(token, projectId, list);
     if (fixture) found.push(fixture);
   }
@@ -791,27 +848,19 @@ export async function listProjectsClearForDraftSeed(
 
 /**
  * Active project with exactly one Active contract covering Invoice Date,
- * and no non-adhoc (non-Cancelled) invoice in the duplicate-check window.
+ * and no non-adhoc invoice in the duplicate-check window (Cancelled still blocks in Canvas).
  */
 export async function findEligibleNonAdhocProject(
   token: string
 ): Promise<ProjectFixture | null> {
   const { end: invoiceDateIso } = getBillingCycleDates();
-  const dupWindow = getDuplicateCheckWindow();
   const invoiceDate = invoiceDateIso.slice(0, 10);
   const contracts = await fetchActiveContractsCoveringDate(token, invoiceDate);
   const byProject = groupContractsByProject(contracts);
 
   for (const [projectId, list] of byProject) {
     if (list.length !== 1) continue;
-    if (
-      await projectHasInvoiceInWindow(token, projectId, dupWindow.start, dupWindow.end, {
-        nonAdhocOnly: true,
-        excludeCancelled: true,
-      })
-    ) {
-      continue;
-    }
+    if (await projectBlockedByDuplicate(token, projectId)) continue;
     const fixture = await toProjectFixture(token, projectId, list);
     if (fixture) return fixture;
   }
@@ -1079,8 +1128,6 @@ export async function loadCreateInvoiceFixtures(
 ): Promise<CreateInvoiceFixtures> {
   const persona = options.persona ?? 'admin';
   const allowedProjectIds = await resolvePersonaProjectIds(token, persona);
-  const dupWindow = getDuplicateCheckWindow();
-  const lastMonth = getLastMonthPrefillWindow();
   const { end: invoiceDateIso } = getBillingCycleDates();
   const invoiceDate = invoiceDateIso.slice(0, 10);
   const fourthStart = fourthMonthStartYmd();
@@ -1094,8 +1141,10 @@ export async function loadCreateInvoiceFixtures(
 
   const byProject = groupContractsByProject(contracts);
   let eligibleNonAdhoc: ProjectFixture | null = null;
+  const eligibleNonAdhocCandidates: ProjectFixture[] = [];
   let duplicateNonAdhoc: ProjectFixture | null = null;
   let noLastMonthInvoice: ProjectFixture | null = null;
+  const noLastMonthInvoiceCandidates: ProjectFixture[] = [];
   let withLastInvoice: ProjectFixture | null = null;
   const withLastInvoiceCandidates: ProjectFixture[] = [];
   let northAmerica: ProjectFixture | null = null;
@@ -1103,6 +1152,7 @@ export async function loadCreateInvoiceFixtures(
   let noFourthMonthCoverage: ProjectFixture | null = null;
   let multiActiveContract: ProjectFixture | null = null;
   let coversFourthMonth: ProjectFixture | null = null;
+  let coversPastThreeMonthCap: ProjectFixture | null = null;
   let threeMonthCapNoDuplicate: ProjectFixture | null = null;
   let threeMonthCapEnd = '';
   const firstBlockedYmd = firstBlockedCapYmd();
@@ -1115,19 +1165,14 @@ export async function loadCreateInvoiceFixtures(
     const project = list[0]?.ittdev_dia_Project;
     if (!isActiveProject(project)) continue;
 
+    const hasBlocking = await projectBlockedByDuplicate(token, projectId);
+
     if (!northAmerica || !nonNorthAmerica) {
       const region =
         project!['david.zara@example.net.V1.FormattedValue'] ??
         (await resolveProjectRegion(token, projectId)) ??
         '';
       const regionLower = region.toLowerCase();
-      const hasBlocking =
-        list.length === 1
-          ? await projectHasInvoiceInWindow(token, projectId, dupWindow.start, dupWindow.end, {
-              nonAdhocOnly: true,
-              excludeCancelled: true,
-            })
-          : true;
       if (!northAmerica && regionLower.includes('north america') && !hasBlocking) {
         northAmerica = await toProjectFixture(token, projectId, list);
       }
@@ -1141,19 +1186,24 @@ export async function loadCreateInvoiceFixtures(
       }
     }
 
-    if (!noLastMonthInvoice && list.length >= 1) {
-      const hasLastCalendar = await projectHasInvoiceInWindow(
-        token,
-        projectId,
-        lastMonth.start,
-        lastMonth.end
-      );
-      if (!hasLastCalendar) {
-        noLastMonthInvoice = await toProjectFixture(token, projectId, list);
+    if (!hasBlocking && noLastMonthInvoiceCandidates.length < 12) {
+      const hasAnyInvoice = await projectHasAnyInvoice(token, projectId);
+      if (!hasAnyInvoice) {
+        const fx = await toProjectFixture(token, projectId, list);
+        if (fx) {
+          // 1-contract first so TC-CI-13 is not blocked by Please select the Contract.
+          if (list.length === 1) {
+            if (!noLastMonthInvoice) noLastMonthInvoice = fx;
+            noLastMonthInvoiceCandidates.unshift(fx);
+          } else {
+            noLastMonthInvoiceCandidates.push(fx);
+            if (!noLastMonthInvoice) noLastMonthInvoice = fx;
+          }
+        }
       }
     }
 
-    if (list.length >= 2 && !multiActiveContract) {
+    if (list.length >= 2 && !multiActiveContract && !hasBlocking) {
       const covering = list.filter((c) => {
         const start = c.ittdev_startdate?.slice(0, 10);
         const end = c.ittdev_enddate?.slice(0, 10);
@@ -1166,21 +1216,22 @@ export async function loadCreateInvoiceFixtures(
     }
 
     const coversFourth = list.some((c) => (c.ittdev_enddate?.slice(0, 10) ?? '') >= fourthStart);
-    if (coversFourth && !coversFourthMonth) {
+    if (coversFourth && !coversFourthMonth && !hasBlocking) {
       const picked = await toProjectFixture(token, projectId, list);
       if (picked) coversFourthMonth = picked;
     }
 
     if (list.length === 1) {
-      const hasBlocking = await projectHasInvoiceInWindow(
-        token,
-        projectId,
-        dupWindow.start,
-        dupWindow.end,
-        { nonAdhocOnly: true, excludeCancelled: true }
-      );
-      if (!hasBlocking && !eligibleNonAdhoc) {
-        eligibleNonAdhoc = await toProjectFixture(token, projectId, list);
+      if (!hasBlocking) {
+        const fx = await toProjectFixture(token, projectId, list);
+        if (fx) {
+          if (!eligibleNonAdhoc) eligibleNonAdhoc = fx;
+          if (eligibleNonAdhocCandidates.length < 20) eligibleNonAdhocCandidates.push(fx);
+          const end = list[0].ittdev_enddate?.slice(0, 10) ?? '';
+          if (!coversPastThreeMonthCap && end >= firstBlockedYmd) {
+            coversPastThreeMonthCap = fx;
+          }
+        }
       }
       if (hasBlocking && !duplicateNonAdhoc) {
         duplicateNonAdhoc = await toProjectFixture(token, projectId, list);
@@ -1205,9 +1256,9 @@ export async function loadCreateInvoiceFixtures(
     }
 
     if (
-      eligibleNonAdhoc &&
+      eligibleNonAdhocCandidates.length >= 12 &&
       duplicateNonAdhoc &&
-      noLastMonthInvoice &&
+      noLastMonthInvoiceCandidates.length >= 4 &&
       withLastInvoiceCandidates.length >= 3 &&
       northAmerica &&
       nonNorthAmerica &&
@@ -1242,13 +1293,7 @@ export async function loadCreateInvoiceFixtures(
     if (capCovering.length === 0) continue;
     const capEnd = capCovering[0].ittdev_enddate?.slice(0, 10) ?? '';
     if (threeMonthCapNoDuplicate && capEnd <= threeMonthCapEnd) continue;
-    const hasBlocking = await projectHasInvoiceInWindow(
-      token,
-      projectId,
-      dupWindow.start,
-      dupWindow.end,
-      { nonAdhocOnly: true, excludeCancelled: true }
-    );
+    const hasBlocking = await projectBlockedByDuplicate(token, projectId);
     if (hasBlocking) continue;
     const picked = await toProjectFixture(token, projectId, capCovering);
     if (picked) {
@@ -1265,8 +1310,10 @@ export async function loadCreateInvoiceFixtures(
 
   return {
     eligibleNonAdhoc,
+    eligibleNonAdhocCandidates,
     duplicateNonAdhoc,
     noLastMonthInvoice,
+    noLastMonthInvoiceCandidates,
     withLastInvoice,
     withLastInvoiceCandidates,
     northAmerica,
@@ -1275,6 +1322,7 @@ export async function loadCreateInvoiceFixtures(
     noFourthMonthCoverage,
     multiActiveContract,
     coversFourthMonth,
+    coversPastThreeMonthCap,
     threeMonthCapNoDuplicate,
     threeMonthCapLookupNote,
     editableProduct,
@@ -1290,8 +1338,32 @@ export function logFixtures(
     p ? `${p.partnerName} / ${p.projectName}${p.region ? ` [${p.region}]` : ''}` : 'NONE';
   console.log(`Create Invoice fixtures (${persona}):`);
   console.log('  eligibleNonAdhoc (no duplicate):', fmt(fixtures.eligibleNonAdhoc));
+  console.log(
+    '  eligibleNonAdhocCandidates:',
+    fixtures.eligibleNonAdhocCandidates.length
+      ? fixtures.eligibleNonAdhocCandidates
+          .slice(0, 8)
+          .map((p) => `${p.partnerName} / ${p.projectName}`)
+          .join(' | ') +
+          (fixtures.eligibleNonAdhocCandidates.length > 8
+            ? ` (+${fixtures.eligibleNonAdhocCandidates.length - 8} more)`
+            : '')
+      : 'NONE'
+  );
   console.log('  duplicateNonAdhoc:', fmt(fixtures.duplicateNonAdhoc));
   console.log('  noLastMonthInvoice:', fmt(fixtures.noLastMonthInvoice));
+  if (fixtures.noLastMonthInvoiceCandidates.length > 1) {
+    console.log(
+      '  noLastMonthInvoiceCandidates:',
+      fixtures.noLastMonthInvoiceCandidates
+        .slice(0, 8)
+        .map((p) => `${p.partnerName} / ${p.projectName}`)
+        .join(' | ') +
+        (fixtures.noLastMonthInvoiceCandidates.length > 8
+          ? ` (+${fixtures.noLastMonthInvoiceCandidates.length - 8} more)`
+          : '')
+    );
+  }
   console.log('  withLastInvoice (prefill source):', fmt(fixtures.withLastInvoice));
   if (fixtures.withLastInvoiceCandidates.length > 1) {
     console.log(
@@ -1305,6 +1377,7 @@ export function logFixtures(
   console.log('  noFourthMonthCoverage:', fmt(fixtures.noFourthMonthCoverage));
   console.log('  multiActiveContract:', fmt(fixtures.multiActiveContract));
   console.log('  coversFourthMonth:', fmt(fixtures.coversFourthMonth));
+  console.log('  coversPastThreeMonthCap:', fmt(fixtures.coversPastThreeMonthCap));
   console.log('  threeMonthCapNoDuplicate:', fmt(fixtures.threeMonthCapNoDuplicate));
   if (fixtures.threeMonthCapLookupNote) {
     console.log('  threeMonthCap windows:', fixtures.threeMonthCapLookupNote);
