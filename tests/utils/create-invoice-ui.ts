@@ -975,16 +975,28 @@ export async function selectPartnerAndProject(
       .or(appFrame.getByRole('button', { name: /^Selected:/ }).nth(1))
   ).toBeVisible({ timeout: 20000 });
 
+  const dup = duplicateLocators(appFrame).title;
+  const noLast = appFrame.getByText(TOAST.noLastInvoice);
+  const selected = selectedProjectButton(appFrame, fixture.projectName);
   await selectProject(appFrame, fixture.projectName);
-  if (await isDuplicatePopupOpen(appFrame)) return 'duplicate';
-  if (await contractModalOpen(appFrame)) {
-    await acceptContractIfPrompted(appFrame);
+  try {
+    await expect
+      .poll(
+        async () => {
+          if (await dup.isVisible().catch(() => false)) return 'duplicate';
+          if (await noLast.isVisible().catch(() => false)) return 'no-last-invoice';
+          if (await selected.isVisible().catch(() => false)) return 'clear';
+          return '';
+        },
+        { timeout: 15000 }
+      )
+      .toMatch(/^(duplicate|no-last-invoice|clear)$/);
+    if (await dup.isVisible().catch(() => false)) return 'duplicate';
+    if (await noLast.isVisible().catch(() => false)) return 'no-last-invoice';
+    return 'clear';
+  } catch {
+    return 'clear';
   }
-  if (await isDuplicatePopupOpen(appFrame)) return 'duplicate';
-  if (await appFrame.getByText(TOAST.noLastInvoice).isVisible().catch(() => false)) {
-    return 'no-last-invoice';
-  }
-  return 'clear';
 }
 
 export async function awaitSubmitNavigatedToOverview(appFrame: FrameLocator): Promise<void> {

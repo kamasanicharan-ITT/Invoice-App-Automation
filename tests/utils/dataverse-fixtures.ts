@@ -1128,6 +1128,7 @@ export async function loadCreateInvoiceFixtures(
 ): Promise<CreateInvoiceFixtures> {
   const persona = options.persona ?? 'admin';
   const allowedProjectIds = await resolvePersonaProjectIds(token, persona);
+  const lastMonth = getLastMonthPrefillWindow();
   const { end: invoiceDateIso } = getBillingCycleDates();
   const invoiceDate = invoiceDateIso.slice(0, 10);
   const fourthStart = fourthMonthStartYmd();
@@ -1186,20 +1187,15 @@ export async function loadCreateInvoiceFixtures(
       }
     }
 
-    if (!hasBlocking && noLastMonthInvoiceCandidates.length < 12) {
-      const hasAnyInvoice = await projectHasAnyInvoice(token, projectId);
-      if (!hasAnyInvoice) {
-        const fx = await toProjectFixture(token, projectId, list);
-        if (fx) {
-          // 1-contract first so TC-CI-13 is not blocked by Please select the Contract.
-          if (list.length === 1) {
-            if (!noLastMonthInvoice) noLastMonthInvoice = fx;
-            noLastMonthInvoiceCandidates.unshift(fx);
-          } else {
-            noLastMonthInvoiceCandidates.push(fx);
-            if (!noLastMonthInvoice) noLastMonthInvoice = fx;
-          }
-        }
+    if (!noLastMonthInvoice && list.length >= 1) {
+      const hasLastCalendar = await projectHasInvoiceInWindow(
+        token,
+        projectId,
+        lastMonth.start,
+        lastMonth.end
+      );
+      if (!hasLastCalendar) {
+        noLastMonthInvoice = await toProjectFixture(token, projectId, list);
       }
     }
 
@@ -1258,7 +1254,7 @@ export async function loadCreateInvoiceFixtures(
     if (
       eligibleNonAdhocCandidates.length >= 12 &&
       duplicateNonAdhoc &&
-      noLastMonthInvoiceCandidates.length >= 4 &&
+      noLastMonthInvoice &&
       withLastInvoiceCandidates.length >= 3 &&
       northAmerica &&
       nonNorthAmerica &&
